@@ -1,7 +1,7 @@
 {
   "name": "frontend",
   "version": "0.1.0",
-  "homepage": "https://github.com/S4mma3l/proyecto_optimizador/",
+  "homepage": "https://s4mma3l.github.io/proyecto_optimizador/",
   "private": true,
   "dependencies": {
     "@testing-library/dom": "^10.4.0",
