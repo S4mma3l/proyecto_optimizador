@@ -19,7 +19,7 @@ function App() {
     setResult(null);
 
     try {
-      const apiUrl = `${process.env.REACT_APP_API_URL}/api/optimize`;
+      const apiUrl = `${"https://proyectooptimizador-production.up.railway.app"}/api/optimize`;
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
