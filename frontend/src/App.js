@@ -13,28 +13,51 @@ function App() {
   const [error, setError] = useState('');
   const layoutRef = useRef(null); // Ref para el contenedor de todos los layouts
 
+  // --- FUNCIÓN DE OPTIMIZACIÓN CON LOGS DE DEPURACIÓN ---
   const handleOptimize = async (requestData) => {
     setIsLoading(true);
     setError('');
     setResult(null);
 
     try {
-      const apiUrl = `https://proyectooptimizador-production.up.railway.app/api/optimize`; 
+      // --- ¡LÍNEA A CORREGIR! ---
+      // Reemplaza esta URL de ejemplo con la URL exacta y correcta de tu dashboard de Railway
+      // que ya probaste y funcionó en Postman.
+      const apiUrl = 'https://proyectooptimizador-production.up.railway.app/api/optimize'; 
+
+      // --- LOGS DE DEPURACIÓN ---
+      console.log("===================================");
+      console.log("Iniciando solicitud a la API...");
+      console.log("URL de destino:", apiUrl);
+      console.log("Datos enviados:", JSON.stringify(requestData, null, 2));
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json' 
+        },
         body: JSON.stringify(requestData),
       });
 
+      console.log("Respuesta recibida del servidor.");
+      console.log("Status Code:", response.status);
+      console.log("Response OK:", response.ok);
+
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({ detail: response.statusText }));
-        throw new Error(`Error en la API: ${errData.detail || 'Ocurrió un error desconocido'}`);
+        // Si la respuesta no es exitosa, intentamos leer el texto del error.
+        const errorText = await response.text();
+        console.error("Respuesta de error de la API:", errorText);
+        throw new Error(`Error en la API (${response.status}). Ver consola para más detalles.`);
       }
 
       const data = await response.json();
+      console.log("Datos recibidos y procesados correctamente:", data);
+      console.log("===================================");
       setResult(data);
-    } catch (err) {
+
+    } catch (err)
+    {
+      console.error("ERROR CATASTRÓFICO EN EL BLOQUE FETCH:", err);
       setError(err.message);
     } finally {
       setIsLoading(false);
@@ -55,42 +78,36 @@ function App() {
       return;
     }
 
-    // 1. Marcar la función como 'async'
-    const pdf = new jsPDF('p', 'mm', 'a4'); // 'p' for portrait
+    const pdf = new jsPDF('p', 'mm', 'a4');
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
     const margin = 10;
     
-    // Añadir un título al PDF
     pdf.setFontSize(18);
     pdf.text('Reporte de Optimización de Corte', pdfWidth / 2, margin + 5, { align: 'center' });
     
-    let yPos = margin + 20; // Posición Y inicial para la primera imagen
+    let yPos = margin + 20;
 
-    // 2. Usar un bucle 'for...of' en lugar de 'forEach'
     for (const sheet of sheetElements) {
-      // 3. Usar 'await' para esperar a que html2canvas termine
       const canvas = await html2canvas(sheet, { 
-          scale: 2, // Mejor resolución
+          scale: 2,
           useCORS: true, 
-          backgroundColor: '#ffffff' // Fondo blanco para evitar transparencias
+          backgroundColor: '#ffffff'
       });
 
       const imgData = canvas.toDataURL('image/png');
       const imgWidth = pdfWidth - margin * 2;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-      // Comprobar si la imagen cabe en la página actual
       if (yPos + imgHeight > pdfHeight - margin) {
-        pdf.addPage(); // Añadir nueva página si no cabe
-        yPos = margin; // Resetear la posición Y en la nueva página
+        pdf.addPage();
+        yPos = margin;
       }
 
       pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
-      yPos += imgHeight + 10; // Incrementar la posición Y para la siguiente imagen, con un espacio
+      yPos += imgHeight + 10;
     }
 
-    // 4. Guardar el PDF DESPUÉS de que el bucle haya terminado completamente
     pdf.save('reporte-de-corte.pdf');
   };
 
@@ -105,10 +122,8 @@ function App() {
           <InputForm onSubmit={handleOptimize} isLoading={isLoading} />
         </div>
         <div className="layout-container">
-          {/* Pasamos el ref al componente hijo para que pueda asignarlo */}
           <CuttingLayout result={result} isLoading={isLoading} error={error} layoutRef={layoutRef} />
           
-          {/* El botón de descarga se queda aquí, en el componente padre */}
           {result && result.sheets && result.sheets.length > 0 && (
             <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginTop: '1rem' }}>
               <FaFilePdf /> Descargar Reporte PDF
