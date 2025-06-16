@@ -20,7 +20,7 @@ class OptimizationRequest(BaseModel):
     kerf: float = 0
 
 app = FastAPI(title="API de Optimización de Corte Iterativa", version="3.1.0")
-origins = ["http://localhost", "http://localhost:3000", "http://127.0.0.1:3000","https://<TU_USUARIO_GITHUB>.github.io"]
+origins = ["http://localhost", "http://localhost:3000", "http://127.0.0.1:3000","https://s4mma3l.github.io/proyecto_optimizador/"]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.post("/api/optimize")
