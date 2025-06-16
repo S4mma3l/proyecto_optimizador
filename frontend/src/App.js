@@ -19,7 +19,8 @@ function App() {
     setResult(null);
 
     try {
-      const apiUrl = `${"https://proyectooptimizador-production.up.railway.app"}/api/optimize`;
+      const apiUrl = `https://proyectooptimizador-production.up.railway.app/api/optimize`; 
+
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
