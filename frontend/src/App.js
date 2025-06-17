@@ -11,72 +11,62 @@ function App() {
   const [result, setResult] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const layoutRef = useRef(null); // Ref para el contenedor de todos los layouts
+  const layoutRef = useRef(null);
 
-  // --- FUNCIÓN DE OPTIMIZACIÓN CON LOGS DE DEPURACIÓN ---
+  // --- FUNCIÓN DE OPTIMIZACIÓN CON MANEJO DE ESTADO MEJORADO ---
   const handleOptimize = async (requestData) => {
+    // 1. Limpiar el estado anterior INMEDIATAMENTE
+    // Esto asegura que cualquier "fantasma" de un error pasado desaparezca.
+    console.log("Limpiando resultados anteriores...");
     setIsLoading(true);
     setError('');
     setResult(null);
 
     try {
-      // --- ¡LÍNEA A CORREGIR! ---
-      // Reemplaza esta URL de ejemplo con la URL exacta y correcta de tu dashboard de Railway
-      // que ya probaste y funcionó en Postman.
+      // URL de tu API de producción.
       const apiUrl = 'https://proyectooptimizador-production.up.railway.app/api/optimize'; 
 
-      // --- LOGS DE DEPURACIÓN ---
-      console.log("===================================");
-      console.log("Iniciando solicitud a la API...");
-      console.log("URL de destino:", apiUrl);
-      console.log("Datos enviados:", JSON.stringify(requestData, null, 2));
-
+      console.log("Enviando solicitud a:", apiUrl);
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json' 
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestData),
       });
 
-      console.log("Respuesta recibida del servidor.");
-      console.log("Status Code:", response.status);
-      console.log("Response OK:", response.ok);
+      console.log("Respuesta recibida. Status:", response.status);
 
+      // 2. Manejar respuestas no exitosas de forma explícita
       if (!response.ok) {
-        // Si la respuesta no es exitosa, intentamos leer el texto del error.
-        const errorText = await response.text();
-        console.error("Respuesta de error de la API:", errorText);
-        throw new Error(`Error en la API (${response.status}). Ver consola para más detalles.`);
+        // Intenta leer el cuerpo del error como JSON, si falla, lee como texto.
+        const errorBody = await response.json().catch(() => response.text());
+        const errorMsg = typeof errorBody === 'object' ? JSON.stringify(errorBody.detail) : errorBody;
+        console.error(`Respuesta de error de la API (${response.status}):`, errorMsg);
+        throw new Error(`Error ${response.status}: ${errorMsg}`);
       }
 
+      // 3. Procesar la respuesta exitosa
       const data = await response.json();
-      console.log("Datos recibidos y procesados correctamente:", data);
-      console.log("===================================");
+      console.log("Solicitud exitosa. Actualizando estado con nuevos datos:", data);
       setResult(data);
 
-    } catch (err)
-    {
-      console.error("ERROR CATASTRÓFICO EN EL BLOQUE FETCH:", err);
-      setError(err.message);
+    } catch (err) {
+      // 4. Capturar errores de red o fallos en el bloque try
+      console.error("Error durante la solicitud fetch:", err);
+      // Muestra un mensaje de error claro al usuario
+      setError(`Error al conectar con la API. Por favor, revisa la consola.`);
     } finally {
+      // 5. Asegurarse de que el estado de carga se desactive siempre
       setIsLoading(false);
     }
   };
   
-  // --- FUNCIÓN DE EXPORTACIÓN A PDF CORREGIDA ---
+  // --- FUNCIÓN DE EXPORTACIÓN A PDF (sin cambios) ---
   const handleDownloadPdf = async () => {
     const container = layoutRef.current;
-    if (!container) {
-      alert("No hay resultados para exportar.");
-      return;
-    }
+    if (!container) return;
 
     const sheetElements = container.querySelectorAll('.single-sheet-container');
-    if (sheetElements.length === 0) {
-      alert("No hay láminas para exportar en el PDF.");
-      return;
-    }
+    if (sheetElements.length === 0) return;
 
     const pdf = new jsPDF('p', 'mm', 'a4');
     const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -90,9 +80,9 @@ function App() {
 
     for (const sheet of sheetElements) {
       const canvas = await html2canvas(sheet, { 
-          scale: 2,
+          scale: 2, 
           useCORS: true, 
-          backgroundColor: '#ffffff'
+          backgroundColor: '#ffffff' 
       });
 
       const imgData = canvas.toDataURL('image/png');
@@ -103,7 +93,6 @@ function App() {
         pdf.addPage();
         yPos = margin;
       }
-
       pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
       yPos += imgHeight + 10;
     }
@@ -123,7 +112,6 @@ function App() {
         </div>
         <div className="layout-container">
           <CuttingLayout result={result} isLoading={isLoading} error={error} layoutRef={layoutRef} />
-          
           {result && result.sheets && result.sheets.length > 0 && (
             <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginTop: '1rem' }}>
               <FaFilePdf /> Descargar Reporte PDF
