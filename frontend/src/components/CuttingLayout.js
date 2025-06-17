@@ -1,5 +1,7 @@
 import React, { useRef, useEffect } from 'react';
-import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt } from 'react-icons/fa';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf } from 'react-icons/fa';
 
 const generatePastelColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 85%)`;
 const getTextColorForBackground = () => 'black';
@@ -44,8 +46,10 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
     );
 };
 
-function CuttingLayout({ result, isLoading, error, layoutRef }) {
+function CuttingLayout({ result, isLoading, error }) {
   const pieceColors = useRef(new Map());
+  const resultsToPrintRef = useRef(null); // Ref para el área que se imprimirá
+
   useEffect(() => {
     if (result && result.sheets) {
         pieceColors.current.clear();
@@ -58,13 +62,37 @@ function CuttingLayout({ result, isLoading, error, layoutRef }) {
     }
   }, [result]);
 
+  const handleDownloadPdf = async () => {
+    const container = resultsToPrintRef.current;
+    if (!container) return;
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdfWidth = pdf.internal.pageSize.getWidth(), margin = 10;
+    pdf.setFontSize(18); pdf.text('Reporte de Optimización de Corte', pdfWidth / 2, margin + 5, { align: 'center' });
+    const canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    const imgData = canvas.toDataURL('image/png');
+    const imgWidth = pdfWidth - margin * 2; const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    pdf.addImage(imgData, 'PNG', margin, 25, imgWidth, imgHeight);
+    pdf.save('reporte-de-corte.pdf');
+  };
+
   const wastePercentage = result?.global_metrics?.waste_percentage;
 
   return (
-    <div ref={layoutRef}>
-      {isLoading && <div className="loader-container"><div className="loader"></div><p>Optimizando...</p></div>}
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {isLoading && (
+        <div className="glass-pane-overlay">
+          <div className="loading-dots-container">
+            <div className="loading-dot"></div><div className="loading-dot"></div><div className="loading-dot"></div>
+          </div>
+          <span>Optimizando...</span>
+        </div>
+      )}
+
       {error && <p className="error-message">{error}</p>}
-      {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
+      
+      {!isLoading && !error && !result && (
+        <p className="placeholder-text">Los resultados de la optimización aparecerán aquí.</p>
+      )}
       
       {result && result.global_metrics && (
         <div className="results-summary">
@@ -85,7 +113,18 @@ function CuttingLayout({ result, isLoading, error, layoutRef }) {
           {result.impossible_to_place_ids?.length > 0 && <p className='warning-message'>IDs imposibles: {result.impossible_to_place_ids.join(', ')}</p>}
         </div>
       )}
-      {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
+
+      {/* Botón de descarga AHORA visible y fuera del área de scroll */}
+      {result && result.sheets && result.sheets.length > 0 && (
+          <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
+            <FaFilePdf /> Descargar Reporte PDF
+          </button>
+      )}
+      
+      {/* Contenedor con scroll solo para la lista de láminas */}
+      <div className="sheets-list-container" ref={resultsToPrintRef}>
+        {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
+      </div>
     </div>
   );
 }
