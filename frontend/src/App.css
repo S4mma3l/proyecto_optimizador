@@ -274,3 +274,46 @@ input:focus {
 .button-success:hover:not(:disabled) {
   background-color: #218838; /* Un verde más oscuro */
 }
+
+/* ... Estilos existentes ... */
+
+.material-type-selector {
+  display: flex;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.material-type-selector label {
+  flex: 1;
+  text-align: center;
+  padding: 0.75rem;
+  cursor: pointer;
+  background-color: #f8f9fa;
+  color: var(--secondary-color);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.material-type-selector label.active {
+  background-color: var(--primary-color);
+  color: white;
+  font-weight: 500;
+}
+
+.material-type-selector input[type="radio"] {
+  display: none; /* Ocultamos el radio button real */
+}
+
+.input-grid-single {
+    display: grid;
+    grid-template-columns: 1fr;
+}
+
+.canvas-wrapper canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* Nuevo estilo para mantener la proporción correcta */
+    aspect-ratio: attr(width) / attr(height); 
+}
