@@ -1,28 +1,17 @@
 /* --- PALETA DE COLORES Y VARIABLES "PRO" --- */
 :root {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  
-  --primary-color: #4f46e5; /* Indigo 600 */
+  --primary-color: #4f46e5;
   --primary-gradient: linear-gradient(to right, #4f46e5, #6366f1);
-  
-  --gray-50: #f9fafb;
   --gray-100: #f3f4f6;
   --gray-200: #e5e7eb;
-  --gray-400: #9ca3af;
   --gray-500: #6b7280;
-  --gray-700: #374151;
   --gray-900: #111827;
-
-  --bg-color: var(--gray-100);
   --panel-bg: #ffffff;
   --text-color: var(--gray-900);
   --text-muted: var(--gray-500);
   --border-color: var(--gray-200);
-  
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-
   --success-color: #10b981;
   --error-color: #ef4444;
   --warning-color: #f59e0b;
@@ -32,9 +21,7 @@
 body {
   margin: 0;
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: var(--bg-color);
+  background-color: var(--gray-100);
   color: var(--text-color);
   overflow-y: scroll;
 }
@@ -46,9 +33,7 @@ body {
   -webkit-backdrop-filter: blur(12px);
   padding: 1rem 2.5rem;
   border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between;
   position: sticky; top: 0; z-index: 100;
   height: 65px; box-sizing: border-box;
 }
@@ -69,50 +54,29 @@ body {
 .developer-button:hover { background-color: var(--gray-100); color: var(--text-color); border-color: var(--border-color); }
 
 main {
-  display: grid;
-  grid-template-columns: 480px 1fr;
-  gap: 2.5rem;
-  padding: 2.5rem;
-  max-width: 1920px;
-  margin: 0 auto;
+  display: grid; grid-template-columns: 480px 1fr; gap: 2.5rem;
+  padding: 2.5rem; max-width: 1920px; margin: 0 auto;
   align-items: start;
 }
 
 /* --- PANELES --- */
 .controls-panel {
-  background-color: var(--panel-bg);
-  border-radius: 16px;
-  padding: 2.5rem;
-  box-shadow: var(--shadow-md);
-  align-self: start;
-  position: sticky;
-  top: 85px;
-  max-height: calc(100vh - 110px);
-  overflow-y: auto;
+  background-color: var(--panel-bg); border-radius: 16px; padding: 2.5rem; box-shadow: var(--shadow-md);
+  align-self: start; position: sticky; top: 85px; max-height: calc(100vh - 110px); overflow-y: auto;
 }
 .layout-container {
-  background-color: var(--panel-bg);
-  border-radius: 16px;
-  padding: 2.5rem;
-  box-shadow: var(--shadow-md);
-  display: flex;
-  flex-direction: column;
+  background-color: var(--panel-bg); border-radius: 16px; padding: 2.5rem; box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column;
   max-height: calc(100vh - 5rem);
 }
 
-/* --- ÁREA DE SCROLL SÓLO PARA LAS LÁMINAS --- */
 .sheets-list-container {
-  flex-grow: 1; /* Ocupa el espacio vertical restante */
-  overflow-y: auto; /* Scroll solo para esta área */
-  margin-top: 1.5rem; /* Espacio después del botón de PDF */
-  padding-right: 1rem; /* Espacio para la barra de scroll */
-  margin-right: -1rem; /* Compensa el padding */
+  flex-grow: 1; overflow-y: auto; margin-top: 1.5rem;
+  padding-right: 1rem; margin-right: -1rem;
 }
-
 
 /* --- FORMULARIOS --- */
 .control-group { margin-bottom: 2.5rem; }
-.control-group:last-child { margin-bottom: 0; }
 .control-group h3 {
   display: flex; align-items: center; gap: 0.75rem; margin: 0 0 1.5rem 0;
   font-size: 1.25rem; font-weight: 600;
@@ -171,13 +135,12 @@ input:focus {
 .metric-card-value.success { color: var(--success-color); }
 .metric-card-value.danger { color: var(--error-color); }
 .metric-card-value.warning { color: var(--warning-color); }
-
 .single-sheet-container { border-top: 1px solid var(--border-color); padding-top: 2rem; margin-top: 2rem; }
 .single-sheet-container:first-child { border-top: none; padding-top: 0; margin-top: 0; }
 .single-sheet-container h4 { margin: 0 0 1.5rem 0; font-size: 1.25rem; font-weight: 600; }
 .canvas-wrapper canvas { border: 1px solid var(--border-color); border-radius: 12px; display: block; max-width: 100%; height: auto; }
 
-/* --- INDICADOR DE CARGA "PUNTOS FLOTANTES" --- */
+/* --- INDICADOR DE CARGA --- */
 .glass-pane-overlay {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
   background-color: rgba(255, 255, 255, 0.6);
@@ -203,3 +166,73 @@ input:focus {
 .error-message { color: var(--error-color); background-color: rgba(239, 68, 68, 0.1); border-left-color: var(--error-color); }
 .warning-message { color: #b45309; background-color: #fef3c7; border-left-color: var(--warning-color); }
 .placeholder-text { text-align: center; color: var(--text-muted); background-color: var(--gray-50); border-left-color: var(--border-color); }
+
+/* --- RESPONSIVIDAD PARA MÓVILES Y PANTALLAS PEQUEÑAS --- */
+@media (max-width: 992px) {
+  main {
+    grid-template-columns: 1fr;
+    padding: 1.5rem;
+    gap: 1.5rem;
+  }
+
+  .App-header {
+    padding: 1rem 1.5rem;
+  }
+
+  .header-title-link h1 {
+    font-size: 1.25rem;
+  }
+
+  .developer-button {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.8rem;
+  }
+
+  .controls-panel {
+    position: static;
+    max-height: none;
+    padding: 1.5rem;
+  }
+
+  .layout-container {
+    max-height: none;
+    padding: 1.5rem;
+  }
+
+  .results-area {
+    overflow-y: visible;
+    margin-right: 0;
+    padding-right: 0;
+  }
+
+  .piece-input-group {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "id id"
+      "width height"
+      "quantity quantity"
+      "button button";
+    row-gap: 0.5rem;
+  }
+  
+  .piece-input-group input:nth-child(1) { grid-area: id; }
+  .piece-input-group input:nth-child(2) { grid-area: width; }
+  .piece-input-group input:nth-child(3) { grid-area: height; }
+  .piece-input-group input:nth-child(4) { grid-area: quantity; }
+  .piece-input-group .button-danger { grid-area: button; justify-self: end; }
+}
+
+@media (max-width: 480px) {
+  main {
+    padding: 1rem;
+  }
+  .App-header {
+    padding: 0.75rem 1rem;
+  }
+  .controls-panel, .layout-container {
+    padding: 1rem;
+  }
+  .metrics-grid {
+    grid-template-columns: 1fr 1fr; /* Fuerza 2 tarjetas por fila */
+  }
+}
