@@ -14,8 +14,8 @@ const ToggleSwitch = ({ label, checked, onChange }) => (
 
 function InputForm({ onSubmit, isLoading }) {
   const [materialType, setMaterialType] = useState('sheet');
-  const [sheetWidth, setSheetWidth] = useState(1220);
-  const [sheetHeight, setSheetHeight] = useState(2440);
+  const [sheetWidth, setSheetWidth] = useState(2440);
+  const [sheetHeight, setSheetHeight] = useState(1220);
   const [rollWidth, setRollWidth] = useState(1370);
   const [kerf, setKerf] = useState(3);
   const [pieces, setPieces] = useState([{ id: 'P1', width: 600, height: 400, quantity: 1 }]);
