@@ -50,7 +50,7 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
 
 function CuttingLayout({ result, isLoading, error }) {
   const pieceColors = useRef(new Map());
-  const resultsContainerRef = useRef(null); // Ref al contenedor de toda el área de resultados
+  const resultsContainerRef = useRef(null);
 
   useEffect(() => {
     if (result && result.sheets) {
@@ -64,18 +64,11 @@ function CuttingLayout({ result, isLoading, error }) {
     }
   }, [result]);
 
-  // --- FUNCIÓN DE DESCARGA DE PDF CON LÓGICA CONDICIONAL ---
   const handleDownloadPdf = async () => {
     const container = resultsContainerRef.current;
     if (!container || !result) return;
     
-    const pdf = new jsPDF({
-        orientation: 'p',
-        unit: 'mm',
-        format: 'a4',
-        compress: true
-    });
-    
+    const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
     const margin = 10;
@@ -85,20 +78,39 @@ function CuttingLayout({ result, isLoading, error }) {
     let yPos = margin + 20;
 
     if (result.global_metrics.material_type === 'roll') {
-        // --- LÓGICA PARA ROLLOS: Captura solo el primer .single-sheet-container ---
+        // --- LÓGICA PARA ROLLOS: Captura el elemento completo y lo pagina ---
         const rollElement = container.querySelector('.single-sheet-container');
         if (!rollElement) return;
 
-        const canvas = await html2canvas(rollElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+        const canvas = await html2canvas(rollElement, {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: '#ffffff',
+            // Opciones clave para capturar contenido fuera de la vista
+            windowWidth: rollElement.scrollWidth,
+            windowHeight: rollElement.scrollHeight
+        });
+
         const imgData = canvas.toDataURL('image/png');
         const imgWidth = pdfWidth - margin * 2;
         const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        
-        pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
+        let heightLeft = imgHeight;
+        let position = 0;
 
+        // Añadir la primera parte de la imagen
+        pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
+        heightLeft -= (pdfHeight - yPos); // Restar el espacio usado en la primera página
+
+        // Añadir más páginas si la imagen es más alta que una página
+        while (heightLeft > 0) {
+            position -= (pdfHeight - margin * 2); // Mover la "ventana" de la imagen hacia arriba
+            pdf.addPage();
+            pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+            heightLeft -= pdfHeight;
+        }
     } else {
-        // --- LÓGICA PARA LÁMINAS: Captura todos los .single-sheet-container ---
-        const sheetElements = container.querySelectorAll('.single-sheet-container');
+        // --- LÓGICA PARA LÁMINAS: Captura cada lámina por separado ---
+        const sheetElements = Array.from(container.querySelectorAll('.single-sheet-container'));
         if (sheetElements.length === 0) return;
 
         for (const sheet of sheetElements) {
@@ -107,13 +119,12 @@ function CuttingLayout({ result, isLoading, error }) {
             const imgWidth = pdfWidth - margin * 2;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-            // Añadir nueva página si no cabe la siguiente lámina
             if (yPos + imgHeight > pdfHeight - margin) {
                 pdf.addPage();
                 yPos = margin;
             }
             pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
-            yPos += imgHeight + 10; // Espacio entre láminas
+            yPos += imgHeight + 10;
         }
     }
 
@@ -132,6 +143,8 @@ function CuttingLayout({ result, isLoading, error }) {
           <span>Optimizando...</span>
         </div>
       )}
+      
+      {/* El ref ahora apunta al contenedor que tiene el scroll */}
       <div className="results-area" ref={resultsContainerRef}>
         {error && <p className="error-message">{error}</p>}
         {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
@@ -155,7 +168,7 @@ function CuttingLayout({ result, isLoading, error }) {
             </button>
         )}
         
-        {/* Este contenedor de scroll ahora solo afecta la visualización en pantalla, no la exportación */}
+        {/* Este contenedor de scroll es solo para la vista en pantalla */}
         <div className="sheets-list-container">
           {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
         </div>
