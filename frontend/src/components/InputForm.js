@@ -1,8 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { FaRulerCombined, FaTh, FaPlus, FaTrashAlt, FaCogs, FaFileExcel, FaLayerGroup, FaWaveSquare } from 'react-icons/fa';
+import { FaRulerCombined, FaTh, FaPlus, FaTrashAlt, FaCogs, FaFileExcel, FaLayerGroup, FaWaveSquare, FaClock } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
 
-// Componente para el interruptor
 const ToggleSwitch = ({ label, checked, onChange }) => (
   <div className="toggle-switch-container">
     <label className="toggle-switch">
@@ -22,6 +21,11 @@ function InputForm({ onSubmit, isLoading }) {
   const [pieces, setPieces] = useState([{ id: 'P1', width: 600, height: 400, quantity: 1 }]);
   const [respectGrain, setRespectGrain] = useState(false);
   const fileInputRef = useRef(null);
+  
+  // --- NUEVOS ESTADOS PARA PARÁMETROS DE CORTE ---
+  const [cuttingSpeed, setCuttingSpeed] = useState(50); // mm/s
+  const [sheetThickness, setSheetThickness] = useState(18); // mm
+  const [cutDepthPerPass, setCutDepthPerPass] = useState(6); // mm
 
   const handleAddPiece = () => {
     const newId = `P${pieces.length + 1}`;
@@ -55,10 +59,9 @@ function InputForm({ onSubmit, isLoading }) {
         })).filter(p => p.quantity > 0);
         setPieces(newPieces);
         alert(`${newPieces.length} tipos de pieza cargados.`);
-      } catch (error) { alert("Error al leer el archivo."); }
+      } catch (error) { console.error("Error al leer el archivo:", error); alert("Error al leer el archivo de Excel."); }
     };
-    reader.readAsBinaryString(file);
-    e.target.value = null; 
+    reader.readAsBinaryString(file); e.target.value = null; 
   };
   
   const handleUploadClick = () => { fileInputRef.current.click(); };
@@ -77,6 +80,10 @@ function InputForm({ onSubmit, isLoading }) {
       pieces: validPieces,
       kerf: Number(kerf),
       respect_grain: respectGrain,
+      // --- ENVIAR NUEVOS PARÁMETROS ---
+      cutting_speed_mms: Number(cuttingSpeed),
+      sheet_thickness_mm: Number(sheetThickness),
+      cut_depth_per_pass_mm: Number(cutDepthPerPass),
     });
   };
 
@@ -85,14 +92,12 @@ function InputForm({ onSubmit, isLoading }) {
       <div className="control-group">
         <h3><FaLayerGroup /> Tipo de Material</h3>
         <div className="material-type-selector">
-          <label className={materialType === 'sheet' ? 'active' : ''}>
-            <input type="radio" name="materialType" value="sheet" checked={materialType === 'sheet'} onChange={() => setMaterialType('sheet')} />Lámina</label>
-          <label className={materialType === 'roll' ? 'active' : ''}>
-            <input type="radio" name="materialType" value="roll" checked={materialType === 'roll'} onChange={() => setMaterialType('roll')} />Rollo</label>
+          <label className={materialType === 'sheet' ? 'active' : ''}><input type="radio" value="sheet" checked={materialType === 'sheet'} onChange={() => setMaterialType('sheet')} />Lámina</label>
+          <label className={materialType === 'roll' ? 'active' : ''}><input type="radio" value="roll" checked={materialType === 'roll'} onChange={() => setMaterialType('roll')} />Rollo</label>
         </div>
       </div>
       <div className="control-group">
-        <h3><FaRulerCombined /> Configuración de Corte</h3>
+        <h3><FaRulerCombined /> Dimensiones y Configuración</h3>
         {materialType === 'sheet' ? (
           <div className="input-grid">
             <input type="number" value={sheetWidth} onChange={e => setSheetWidth(e.target.value)} placeholder="Ancho" required />
@@ -102,16 +107,33 @@ function InputForm({ onSubmit, isLoading }) {
           <div className="input-grid-single"><input type="number" value={rollWidth} onChange={e => setRollWidth(e.target.value)} placeholder="Ancho del Rollo" required /></div>
         )}
         <div className="input-grid-single" style={{marginTop: '1rem', marginBottom: '1.5rem'}}>
-          <input type="number" value={kerf} onChange={e => setKerf(e.target.value)} placeholder="Grosor Corte (Kerf)" required />
+            <label className="input-label">Grosor de Cuchilla / Fresa (Kerf en mm)</label>
+            <input type="number" value={kerf} onChange={e => setKerf(e.target.value)} required />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
           <FaWaveSquare size="1.2em" color="var(--text-muted)"/>
-          <ToggleSwitch 
-            label="Respetar Veta (no rotar)" 
-            checked={respectGrain} 
-            onChange={(e) => setRespectGrain(e.target.checked)}
-          />
+          <ToggleSwitch label="Respetar Veta (no rotar)" checked={respectGrain} onChange={(e) => setRespectGrain(e.target.checked)} />
         </div>
+      </div>
+      {/* --- NUEVO GRUPO PARA PARÁMETROS DE LA MÁQUINA --- */}
+      <div className="control-group">
+        <h3><FaClock /> Parámetros de la Máquina</h3>
+        <div className="input-grid-single">
+            <label className="input-label">Velocidad de Corte (mm/s)</label>
+            <input type="number" value={cuttingSpeed} onChange={e => setCuttingSpeed(e.target.value)} required />
+        </div>
+        {materialType === 'sheet' && (
+            <div className="input-grid" style={{marginTop: '1rem'}}>
+                <div>
+                    <label className="input-label">Grosor de Lámina (mm)</label>
+                    <input type="number" value={sheetThickness} onChange={e => setSheetThickness(e.target.value)} required />
+                </div>
+                <div>
+                    <label className="input-label">Corte por Pasada (mm)</label>
+                    <input type="number" value={cutDepthPerPass} onChange={e => setCutDepthPerPass(e.target.value)} required />
+                </div>
+            </div>
+        )}
       </div>
       <div className="control-group">
         <h3><FaTh /> Piezas a Cortar (mm)</h3>

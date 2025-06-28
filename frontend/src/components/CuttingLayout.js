@@ -1,10 +1,11 @@
 import React, { useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf, FaBoxes } from 'react-icons/fa';
+import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf, FaBoxes, FaClock } from 'react-icons/fa';
 
+// --- ¡FUNCIONES AUXILIARES RESTAURADAS AQUÍ! ---
 const generatePastelColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 85%)`;
-const getTextColorForBackground = () => 'black';
+const getTextColorForBackground = () => 'black'; // Para pasteles claros, el negro siempre es legible.
 
 const SingleSheetLayout = ({ sheetData, pieceColors }) => {
     const canvasRef = useRef(null);
@@ -23,7 +24,7 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
             ctx.fillStyle = pieceColors.current.get(baseId) || 'gray'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
             ctx.fillRect(p.x, p.y, p.width, p.height); ctx.strokeRect(p.x, p.y, p.width, p.height);
             if (p.width > 30 && p.height > 20) {
-              ctx.fillStyle = getTextColorForBackground();
+              ctx.fillStyle = getTextColorForBackground(); // Ahora esta función existe
               const fontSize = Math.max(10, Math.min(p.width, p.height) / 5);
               ctx.font = `bold ${fontSize}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
               const label = baseId; const dims = `${p.width}x${p.height}`;
@@ -48,6 +49,20 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
     );
 };
 
+// --- NUEVA FUNCIÓN HELPER PARA FORMATEAR EL TIEMPO ---
+const formatTime = (totalSeconds) => {
+  if (totalSeconds < 0 || !totalSeconds) return "0s";
+  totalSeconds = Math.round(totalSeconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  let timeString = "";
+  if (hours > 0) timeString += `${hours}h `;
+  if (minutes > 0) timeString += `${minutes}m `;
+  if (seconds > 0 || timeString === "") timeString += `${seconds}s`;
+  return timeString.trim();
+};
+
 function CuttingLayout({ result, isLoading, error }) {
   const pieceColors = useRef(new Map());
   const resultsContainerRef = useRef(null);
@@ -58,7 +73,7 @@ function CuttingLayout({ result, isLoading, error }) {
         result.sheets.forEach(s => s.placed_pieces.forEach(p => {
             const baseId = p.id.split('-')[0];
             if (!pieceColors.current.has(baseId)) {
-                pieceColors.current.set(baseId, generatePastelColor());
+                pieceColors.current.set(baseId, generatePastelColor()); // Ahora esta función existe
             }
         }));
     }
@@ -67,58 +82,37 @@ function CuttingLayout({ result, isLoading, error }) {
   const handleDownloadPdf = async () => {
     const container = resultsContainerRef.current;
     if (!container || !result) return;
-    
     const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
     const margin = 10;
-    
-    pdf.setFontSize(18);
-    pdf.text('Reporte de Optimización de Corte', pdfWidth / 2, margin + 5, { align: 'center' });
+    pdf.setFontSize(18); pdf.text('Reporte de Optimización de Corte', pdfWidth / 2, margin + 5, { align: 'center' });
     let yPos = margin + 20;
 
     if (result.global_metrics.material_type === 'roll') {
-        // --- LÓGICA PARA ROLLOS: Captura el elemento completo y lo pagina ---
         const rollElement = container.querySelector('.single-sheet-container');
         if (!rollElement) return;
-
-        const canvas = await html2canvas(rollElement, {
-            scale: 2,
-            useCORS: true,
-            backgroundColor: '#ffffff',
-            // Opciones clave para capturar contenido fuera de la vista
-            windowWidth: rollElement.scrollWidth,
-            windowHeight: rollElement.scrollHeight
-        });
-
+        const canvas = await html2canvas(rollElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: rollElement.scrollWidth, windowHeight: rollElement.scrollHeight });
         const imgData = canvas.toDataURL('image/png');
         const imgWidth = pdfWidth - margin * 2;
         const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        let heightLeft = imgHeight;
-        let position = 0;
-
-        // Añadir la primera parte de la imagen
+        let heightLeft = imgHeight, position = 0;
         pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
-        heightLeft -= (pdfHeight - yPos); // Restar el espacio usado en la primera página
-
-        // Añadir más páginas si la imagen es más alta que una página
+        heightLeft -= (pdfHeight - yPos);
         while (heightLeft > 0) {
-            position -= (pdfHeight - margin * 2); // Mover la "ventana" de la imagen hacia arriba
+            position -= (pdfHeight - margin * 2);
             pdf.addPage();
             pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
             heightLeft -= pdfHeight;
         }
     } else {
-        // --- LÓGICA PARA LÁMINAS: Captura cada lámina por separado ---
         const sheetElements = Array.from(container.querySelectorAll('.single-sheet-container'));
         if (sheetElements.length === 0) return;
-
         for (const sheet of sheetElements) {
             const canvas = await html2canvas(sheet, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
             const imgData = canvas.toDataURL('image/png');
             const imgWidth = pdfWidth - margin * 2;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
             if (yPos + imgHeight > pdfHeight - margin) {
                 pdf.addPage();
                 yPos = margin;
@@ -127,7 +121,6 @@ function CuttingLayout({ result, isLoading, error }) {
             yPos += imgHeight + 10;
         }
     }
-
     pdf.save('reporte-de-optimizacion.pdf');
   };
 
@@ -143,9 +136,7 @@ function CuttingLayout({ result, isLoading, error }) {
           <span>Optimizando...</span>
         </div>
       )}
-      
-      {/* El ref ahora apunta al contenedor que tiene el scroll */}
-      <div className="results-area" ref={resultsContainerRef}>
+      <div className="results-area">
         {error && <p className="error-message">{error}</p>}
         {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
         {metrics && (
@@ -156,6 +147,7 @@ function CuttingLayout({ result, isLoading, error }) {
               {metrics.total_material_area_sqm !== undefined && (<MetricCard icon={<FaBoxes />} title="Material Usado" value={`${metrics.total_material_area_sqm} m²`} />)}
               <MetricCard icon={<FaTh />} title="Piezas Colocadas" value={`${metrics.total_placed_pieces} / ${metrics.total_pieces}`} className={metrics.total_placed_pieces < metrics.total_pieces ? 'danger' : 'success'} />
               {metrics.waste_percentage !== undefined && (<MetricCard icon={<FaTrashAlt />} title="Desperdicio" value={`${metrics.waste_percentage}%`} className="warning" />)}
+              {metrics.estimated_time_seconds !== undefined && ( <MetricCard icon={<FaClock />} title="Tiempo de Corte" value={formatTime(metrics.estimated_time_seconds)} /> )}
               {result.impossible_to_place_ids?.length > 0 && <MetricCard icon={<FaBan />} title="Piezas Imposibles" value={result.impossible_to_place_ids.length} className="danger" />}
               {result.unplaced_piece_ids?.length > 0 && <MetricCard icon={<FaExclamationTriangle />} title="Piezas Sin Espacio" value={result.unplaced_piece_ids.length} className="danger" />}
             </div>
@@ -167,9 +159,7 @@ function CuttingLayout({ result, isLoading, error }) {
               <FaFilePdf /> Descargar Reporte PDF
             </button>
         )}
-        
-        {/* Este contenedor de scroll es solo para la vista en pantalla */}
-        <div className="sheets-list-container">
+        <div className="sheets-list-container" ref={resultsContainerRef}>
           {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
         </div>
       </div>
