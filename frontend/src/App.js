@@ -14,7 +14,6 @@ function App() {
     setError('');
     setResult(null);
     try {
-      // La URL de tu API de producción
       const apiUrl = 'https://proyectooptimizador-production.up.railway.app/api/optimize';
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -56,7 +55,6 @@ function App() {
           <InputForm onSubmit={handleOptimize} isLoading={isLoading} />
         </div>
         <div className="layout-container">
-          {/* El componente CuttingLayout ahora maneja su propia lógica de PDF */}
           <CuttingLayout result={result} isLoading={isLoading} error={error} />
         </div>
       </main>

@@ -1,6 +1,17 @@
 import React, { useState, useRef } from 'react';
-import { FaRulerCombined, FaTh, FaPlus, FaTrashAlt, FaCogs, FaFileExcel, FaLayerGroup } from 'react-icons/fa';
+import { FaRulerCombined, FaTh, FaPlus, FaTrashAlt, FaCogs, FaFileExcel, FaLayerGroup, FaWaveSquare } from 'react-icons/fa';
 import * as XLSX from 'xlsx';
+
+// Componente para el interruptor
+const ToggleSwitch = ({ label, checked, onChange }) => (
+  <div className="toggle-switch-container">
+    <label className="toggle-switch">
+      <input type="checkbox" checked={checked} onChange={onChange} />
+      <span className="slider round"></span>
+    </label>
+    <span>{label}</span>
+  </div>
+);
 
 function InputForm({ onSubmit, isLoading }) {
   const [materialType, setMaterialType] = useState('sheet');
@@ -9,6 +20,7 @@ function InputForm({ onSubmit, isLoading }) {
   const [rollWidth, setRollWidth] = useState(1220);
   const [kerf, setKerf] = useState(3);
   const [pieces, setPieces] = useState([{ id: 'P1', width: 600, height: 400, quantity: 1 }]);
+  const [respectGrain, setRespectGrain] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleAddPiece = () => {
@@ -27,8 +39,7 @@ function InputForm({ onSubmit, isLoading }) {
   };
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -68,6 +79,7 @@ function InputForm({ onSubmit, isLoading }) {
       sheet: materialType === 'sheet' ? { width: Number(sheetWidth), height: Number(sheetHeight) } : { width: Number(rollWidth), height: -1 },
       pieces: validPieces,
       kerf: Number(kerf),
+      respect_grain: respectGrain,
     });
   };
 
@@ -83,7 +95,7 @@ function InputForm({ onSubmit, isLoading }) {
         </div>
       </div>
       <div className="control-group">
-        <h3><FaRulerCombined /> Dimensiones (mm)</h3>
+        <h3><FaRulerCombined /> Configuración de Corte</h3>
         {materialType === 'sheet' ? (
           <div className="input-grid">
             <input type="number" value={sheetWidth} onChange={e => setSheetWidth(e.target.value)} placeholder="Ancho" required />
@@ -92,7 +104,17 @@ function InputForm({ onSubmit, isLoading }) {
         ) : (
           <div className="input-grid-single"><input type="number" value={rollWidth} onChange={e => setRollWidth(e.target.value)} placeholder="Ancho del Rollo" required /></div>
         )}
-        <div className="input-grid-single" style={{marginTop: '1rem'}}><input type="number" value={kerf} onChange={e => setKerf(e.target.value)} placeholder="Grosor Corte (Kerf)" required /></div>
+        <div className="input-grid-single" style={{marginTop: '1rem', marginBottom: '1.5rem'}}>
+          <input type="number" value={kerf} onChange={e => setKerf(e.target.value)} placeholder="Grosor Corte (Kerf)" required />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+          <FaWaveSquare size="1.2em" color="var(--text-muted)"/>
+          <ToggleSwitch 
+            label="Respetar Veta (no rotar)" 
+            checked={respectGrain} 
+            onChange={(e) => setRespectGrain(e.target.checked)}
+          />
+        </div>
       </div>
       <div className="control-group">
         <h3><FaTh /> Piezas a Cortar (mm)</h3>

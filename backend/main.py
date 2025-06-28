@@ -4,11 +4,11 @@ from pydantic import BaseModel
 from typing import List, Literal
 import rectpack
 
-# --- MODELO DE PIEZA ACTUALIZADO ---
+# --- MODELOS DE DATOS (sin cambios) ---
 class Piece(BaseModel):
+    id: str
     width: float
     height: float
-    id: str
     quantity: int = 1
 
 class Sheet(BaseModel):
@@ -20,125 +20,122 @@ class OptimizationRequest(BaseModel):
     sheet: Sheet
     pieces: List[Piece]
     kerf: float = 0
+    respect_grain: bool = False
 
-app = FastAPI(title="API de Optimización de Corte v6", version="6.1.0")
+# --- CONFIGURACIÓN DE FASTAPI Y CORS (sin cambios) ---
+app = FastAPI(
+    title="API de Optimización de Corte v8 - Hyper-Optimization",
+    description="API con 'torneo de algoritmos' para resultados superiores.",
+    version="8.0.0"
+)
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-def pack_on_roll(roll_width, pieces, kerf):
-    placed_pieces, impossible_ids = [], []
-    pieces_sorted = sorted(pieces, key=lambda p: p.height, reverse=True)
-    current_x, current_y, row_height = 0, 0, 0
+# --- FUNCIÓN HELPER PARA EL TORNEO ---
+def run_one_packing_algorithm(unpacked_pieces, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
+    packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
     
-    for piece in pieces_sorted:
-        width_orig, height_orig = piece.width, piece.height
-        if (width_orig + kerf > roll_width) and (height_orig + kerf > roll_width):
-            impossible_ids.append(piece.id)
-            continue
+    for p in unpacked_pieces:
+        packer.add_rect(width=p.width + kerf, height=p.height + kerf, rid=p.id)
 
-        use_width, use_height = width_orig + kerf, height_orig + kerf
-        rotated = False
-        if use_width > roll_width:
-             use_width, use_height = use_height, use_width
-             rotated = True
+    if material_type == 'roll':
+        packer.add_bin(width=sheet_width, height=9999999)
+    else:
+        packer.add_bin(width=sheet_width, height=sheet_height)
         
-        if current_x + use_width > roll_width:
-            current_y += row_height
-            current_x, row_height = 0, 0
-
-        placed_pieces.append({
-            "id": piece.id, "x": current_x, "y": current_y,
-            "width": use_width - kerf, "height": use_height - kerf, "rotated": rotated
-        })
-        current_x += use_width
-        if use_height > row_height: row_height = use_height
+    packer.pack()
     
-    total_consumed_length = current_y + row_height if placed_pieces else 0
-    return placed_pieces, total_consumed_length, impossible_ids
+    # Calcular el "score" para este resultado
+    if material_type == 'roll':
+        max_y = 0
+        if packer and packer[0]:
+            for r in packer[0]:
+                if r.y + r.height > max_y:
+                    max_y = r.y + r.height
+        score = {'consumed_length': max_y}
+    else:
+        num_sheets = len(packer)
+        waste = 0
+        if num_sheets > 0:
+            last_bin = packer[num_sheets - 1]
+            total_area = sum(r.width * r.height for r in last_bin)
+            waste = (last_bin.width * last_bin.height) - total_area
+        score = {'sheets_used': num_sheets, 'waste_on_last': waste}
+
+    return {'packer': packer, 'score': score}
+
 
 @app.post("/api/optimize")
 def optimize_layout(request: OptimizationRequest):
-    # 1. "Desempaquetar" las piezas según la cantidad
-    unpacked_pieces = []
-    for piece in request.pieces:
-        for i in range(piece.quantity):
-            unpacked_pieces.append(Piece(id=f"{piece.id}-{i+1}" if piece.quantity > 1 else piece.id, width=piece.width, height=piece.height))
+    # 1. Desempaquetar piezas
+    unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height)
+                       for p in request.pieces for i in range(p.quantity)]
 
-    kerf = request.kerf
-    
+    # --- INICIO DEL TORNEO DE ALGORITMOS ---
+    algos_to_test = [
+        rectpack.MaxRectsBssf, # Best Short Side Fit
+        rectpack.MaxRectsBaf,  # Best Area Fit
+        rectpack.MaxRectsBlsf, # Best Long Side Fit
+        rectpack.GuillotineBssfSas, # Guillotine Best Short Side Fit, Shorter Axis Split
+    ]
+
+    all_results = []
+    for algo in algos_to_test:
+        result = run_one_packing_algorithm(
+            unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height,
+            request.kerf, not request.respect_grain, algo
+        )
+        all_results.append(result)
+
+    # --- DETERMINAR EL GANADOR ---
     if request.material_type == 'roll':
-        roll_width = request.sheet.width
-        placed_pieces, consumed_length, impossible_ids = pack_on_roll(roll_width, unpacked_pieces, kerf)
-        
-        placed_ids = {p['id'] for p in placed_pieces}
-        total_placed_piece_area = sum(p.width * p.height for p in unpacked_pieces if p.id in placed_ids)
-        total_roll_area_used = roll_width * consumed_length if consumed_length > 0 else 0
-        waste_area = total_roll_area_used - total_placed_piece_area
-        waste_percentage = (waste_area / total_roll_area_used) * 100 if total_roll_area_used > 0 else 0
-        
-        sheet_data = {
-            "sheet_index": 1,
-            "sheet_dimensions": {"width": roll_width, "height": consumed_length if consumed_length > 0 else 1},
-            "placed_pieces": placed_pieces,
-            "metrics": {"piece_count": len(placed_pieces)}
-        }
-        
-        return {
-            "sheets": [sheet_data] if placed_pieces or impossible_ids else [],
-            "impossible_to_place_ids": impossible_ids, "unplaced_piece_ids": [],
-            "global_metrics": {
-                "material_type": "roll",
-                "total_pieces": len(unpacked_pieces),
-                "total_placed_pieces": len(placed_pieces),
-                "waste_percentage": round(waste_percentage, 2)
-            }
-        }
+        # Para rollos, el mejor es el que tiene la menor longitud consumida
+        best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
-        sheet_width, sheet_height = request.sheet.width, request.sheet.height
-        placeable_pieces_models, impossible_ids = [], []
-        for p in unpacked_pieces:
-            w, h = p.width + kerf, p.height + kerf
-            if (w <= sheet_width and h <= sheet_height) or (w <= sheet_height and h <= sheet_width):
-                placeable_pieces_models.append(p)
-            else:
-                impossible_ids.append(p.id)
-        
-        pieces_to_pack = [{'width': p.width + kerf, 'height': p.height + kerf, 'rid': p.id} for p in placeable_pieces_models]
-        packed_sheets = []
-        
-        while pieces_to_pack:
-            packer = rectpack.newPacker(pack_algo=rectpack.GuillotineBafLas, rotation=True)
-            for p_data in pieces_to_pack: packer.add_rect(**p_data)
-            packer.add_bin(sheet_width, sheet_height)
-            packer.pack()
-            placed_rects = packer[0]
-            if not placed_rects: break
-            
-            placed_ids = {r.rid for r in placed_rects}
-            sheet_data = {"sheet_index": len(packed_sheets) + 1, "sheet_dimensions": {"width": sheet_width, "height": sheet_height}, "placed_pieces": [], "metrics": {}}
-            sheet_data["metrics"]["piece_count"] = len(placed_rects)
-            packed_sheets.append(sheet_data)
-            for r in placed_rects:
-                orig_p = next((p for p in placeable_pieces_models if p.id == r.rid), None)
-                pw, ph = r.width - kerf, r.height - kerf
-                sheet_data["placed_pieces"].append({"id": r.rid, "x": r.x, "y": r.y, "width": pw, "height": ph, "rotated": pw != orig_p.width if orig_p else False})
-            
-            pieces_to_pack = [p for p in pieces_to_pack if p['rid'] not in placed_ids]
-            
-        unplaced_ids = [p['rid'] for p in pieces_to_pack]
-        
-        all_placed_ids = {p['id'] for s in packed_sheets for p in s['placed_pieces']}
-        total_placed_piece_area = sum(p.width * p.height for p in unpacked_pieces if p.id in all_placed_ids)
-        total_sheet_area_used = len(packed_sheets) * sheet_width * sheet_height
-        waste_area = total_sheet_area_used - total_placed_piece_area
-        waste_percentage = (waste_area / total_sheet_area_used) * 100 if total_sheet_area_used > 0 else 0
+        # Para láminas, el mejor es el que usa menos láminas, y luego el con menos desperdicio en la última
+        best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
+    
+    winner_packer = best_result['packer']
 
-        return {
-            "sheets": packed_sheets, "impossible_to_place_ids": impossible_ids, "unplaced_piece_ids": unplaced_ids,
-            "global_metrics": {
-                "material_type": "sheet", "total_sheets_used": len(packed_sheets),
-                "total_pieces": len(unpacked_pieces), "total_placed_pieces": len(all_placed_ids),
-                "waste_percentage": round(waste_percentage, 2)
-            }
+    # --- 5. PROCESAR EL RESULTADO DEL GANADOR ---
+    packed_sheets, all_placed_ids, total_placed_piece_area, max_y_in_roll = [], set(), 0, 0
+
+    for i, abin in enumerate(winner_packer):
+        if not abin: continue
+        sheet_data = {"sheet_index": len(packed_sheets) + 1, "sheet_dimensions": {"width": abin.width, "height": abin.height}, "placed_pieces": [], "metrics": {}}
+        for r in abin:
+            all_placed_ids.add(r.rid)
+            pw, ph = r.width - request.kerf, r.height - request.kerf
+            original_piece = next((p for p in unpacked_pieces if p.id == r.rid), None)
+            is_rotated = (pw != original_piece.width) if original_piece and not request.respect_grain else False
+            sheet_data["placed_pieces"].append({"id": r.rid, "x": r.x, "y": r.y, "width": pw, "height": ph, "rotated": is_rotated})
+            total_placed_piece_area += pw * ph
+            if r.y + r.height > max_y_in_roll: max_y_in_roll = r.y + r.height
+        sheet_data["metrics"]["piece_count"] = len(abin)
+        packed_sheets.append(sheet_data)
+
+    impossible_ids = [p.id for p in unpacked_pieces if p.id not in all_placed_ids]
+    
+    # --- 6. CALCULAR MÉTRICAS GLOBALES DEL GANADOR ---
+    if request.material_type == 'roll' and packed_sheets:
+        consumed_length = max_y_in_roll
+        packed_sheets[0]['sheet_dimensions']['height'] = consumed_length if consumed_length > 0 else 1
+        total_material_area = request.sheet.width * consumed_length
+        waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
+    else:
+        total_material_area = len(packed_sheets) * request.sheet.width * request.sheet.height
+        waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
+
+    return {
+        "sheets": packed_sheets,
+        "impossible_to_place_ids": impossible_ids,
+        "unplaced_piece_ids": [],
+        "global_metrics": {
+            "material_type": request.material_type,
+            "total_sheets_used": len(packed_sheets),
+            "total_pieces": len(unpacked_pieces),
+            "total_placed_pieces": len(all_placed_ids),
+            "waste_percentage": round(waste_percentage, 2)
         }
+    }

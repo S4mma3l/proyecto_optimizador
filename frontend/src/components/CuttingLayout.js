@@ -22,12 +22,15 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
             const baseId = p.id.split('-')[0];
             ctx.fillStyle = pieceColors.current.get(baseId) || 'gray'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
             ctx.fillRect(p.x, p.y, p.width, p.height); ctx.strokeRect(p.x, p.y, p.width, p.height);
-            ctx.fillStyle = getTextColorForBackground();
-            const fontSize = Math.max(10, Math.min(p.width, p.height) / 5);
-            ctx.font = `bold ${fontSize}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            const label = baseId; const dims = `${p.width}x${p.height}`;
-            ctx.fillText(label, p.x + p.width / 2, p.y + p.height / 2 - fontSize/2);
-            ctx.fillText(dims, p.x + p.width / 2, p.y + p.height / 2 + fontSize/2);
+            // Mostrar texto si la pieza es lo suficientemente grande
+            if (p.width > 30 && p.height > 20) {
+              ctx.fillStyle = getTextColorForBackground();
+              const fontSize = Math.max(10, Math.min(p.width, p.height) / 5);
+              ctx.font = `bold ${fontSize}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+              const label = baseId; const dims = `${p.width}x${p.height}`;
+              ctx.fillText(label, p.x + p.width / 2, p.y + p.height / 2 - fontSize/2);
+              ctx.fillText(dims, p.x + p.width / 2, p.y + p.height / 2 + fontSize/2);
+            }
         });
     }, [sheetData, pieceColors]);
 
@@ -35,7 +38,7 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
         <div className="single-sheet-container">
             <h4>
                 <span>
-                    {sheetData.metrics.consumed_length_mm !== undefined ? 'Resultado del Rollo' : `Lámina #${sheetData.sheet_index}`}
+                    {sheetData.sheet_dimensions.height === 9999999 ? 'Resultado del Rollo' : `Lámina #${sheetData.sheet_index}`}
                 </span>
                 <span className="sheet-metrics">
                     ({sheetData.metrics.piece_count} piezas)
@@ -48,7 +51,7 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
 
 function CuttingLayout({ result, isLoading, error }) {
   const pieceColors = useRef(new Map());
-  const resultsToPrintRef = useRef(null); // Ref para el área que se imprimirá
+  const resultsToPrintRef = useRef(null);
 
   useEffect(() => {
     if (result && result.sheets) {
@@ -87,13 +90,8 @@ function CuttingLayout({ result, isLoading, error }) {
           <span>Optimizando...</span>
         </div>
       )}
-
       {error && <p className="error-message">{error}</p>}
-      
-      {!isLoading && !error && !result && (
-        <p className="placeholder-text">Los resultados de la optimización aparecerán aquí.</p>
-      )}
-      
+      {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
       {result && result.global_metrics && (
         <div className="results-summary">
           <h3>Resumen Global</h3>
@@ -113,15 +111,11 @@ function CuttingLayout({ result, isLoading, error }) {
           {result.impossible_to_place_ids?.length > 0 && <p className='warning-message'>IDs imposibles: {result.impossible_to_place_ids.join(', ')}</p>}
         </div>
       )}
-
-      {/* Botón de descarga AHORA visible y fuera del área de scroll */}
       {result && result.sheets && result.sheets.length > 0 && (
           <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
             <FaFilePdf /> Descargar Reporte PDF
           </button>
       )}
-      
-      {/* Contenedor con scroll solo para la lista de láminas */}
       <div className="sheets-list-container" ref={resultsToPrintRef}>
         {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
       </div>
