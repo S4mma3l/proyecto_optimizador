@@ -46,7 +46,7 @@ function App() {
         </div>
         <div className="header-right">
           <a href="https://www.linkedin.com/in/pentestercr/" target="_blank" rel="noopener noreferrer" className="developer-button">
-            Desarrollado por Ángel Hernández M. | Version 1.3
+            Desarrollado por Ángel Hernández M. | Version 1.4
           </a>
         </div>
       </header>
