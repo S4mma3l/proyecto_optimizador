@@ -294,3 +294,10 @@ input:checked + .slider:before {
   color: var(--text-muted);
   margin-bottom: 0.5rem;
 }
+
+/* ... (al final de tu archivo App.css) ... */
+
+.header-separator {
+  color: var(--border-color);
+  margin: 0 0.5rem;
+}

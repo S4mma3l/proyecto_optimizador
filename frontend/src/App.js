@@ -44,11 +44,18 @@ function App() {
             <h1>Optimizador Pro</h1>
           </a>
         </div>
+        
+        {/* --- CABECERA DERECHA ACTUALIZADA --- */}
         <div className="header-right">
+          <a href="https://s4mma3l.github.io/Pagina_de_valoracion/" target="_blank" rel="noopener noreferrer" className="developer-button">
+            Sugerencias
+          </a>
+          <span className="header-separator">|</span>
           <a href="https://www.linkedin.com/in/pentestercr/" target="_blank" rel="noopener noreferrer" className="developer-button">
-            Desarrollado por Ángel Hernández M. | Version 1.4
+            Desarrollado por Ángel Hernández M. | Version 1.3
           </a>
         </div>
+
       </header>
       <main>
         <div className="controls-panel">
