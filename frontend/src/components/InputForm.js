@@ -55,10 +55,7 @@ function InputForm({ onSubmit, isLoading }) {
         })).filter(p => p.quantity > 0);
         setPieces(newPieces);
         alert(`${newPieces.length} tipos de pieza cargados.`);
-      } catch (error) {
-        console.error("Error al leer el archivo:", error);
-        alert("Error al leer el archivo de Excel.");
-      }
+      } catch (error) { alert("Error al leer el archivo."); }
     };
     reader.readAsBinaryString(file);
     e.target.value = null; 
