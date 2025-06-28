@@ -50,85 +50,74 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
 
 function CuttingLayout({ result, isLoading, error }) {
   const pieceColors = useRef(new Map());
-  const resultsToPrintRef = useRef(null); // Ref al área que queremos imprimir
+  const resultsContainerRef = useRef(null); // Ref al contenedor de toda el área de resultados
 
   useEffect(() => {
     if (result && result.sheets) {
         pieceColors.current.clear();
         result.sheets.forEach(s => s.placed_pieces.forEach(p => {
             const baseId = p.id.split('-')[0];
-            if (!pieceColors.current.has(baseId)) pieceColors.current.set(baseId, generatePastelColor());
+            if (!pieceColors.current.has(baseId)) {
+                pieceColors.current.set(baseId, generatePastelColor());
+            }
         }));
     }
   }, [result]);
 
-  // --- FUNCIÓN DE DESCARGA DE PDF CORREGIDA Y ROBUSTA ---
+  // --- FUNCIÓN DE DESCARGA DE PDF CON LÓGICA CONDICIONAL ---
   const handleDownloadPdf = async () => {
-    const reportElement = resultsToPrintRef.current;
-    if (!reportElement) return;
-
-    // Guardar los estilos originales
-    const originalHeight = reportElement.style.height;
-    const originalOverflow = reportElement.style.overflow;
-
-    // 1. Modificar estilos para hacer todo el contenido visible para html2canvas
-    reportElement.style.height = 'auto';
-    reportElement.style.overflow = 'visible';
+    const container = resultsContainerRef.current;
+    if (!container || !result) return;
     
-    // Pequeña demora para asegurar que el DOM se actualice antes de la captura
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+    });
+    
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const margin = 10;
+    
+    pdf.setFontSize(18);
+    pdf.text('Reporte de Optimización de Corte', pdfWidth / 2, margin + 5, { align: 'center' });
+    let yPos = margin + 20;
 
-    try {
-        const canvas = await html2canvas(reportElement, {
-            scale: 2, // Mejor resolución
-            useCORS: true,
-            backgroundColor: '#ffffff',
-            // Opciones para asegurar que capture el contenido completo
-            windowWidth: reportElement.scrollWidth,
-            windowHeight: reportElement.scrollHeight
-        });
-        
-        // 2. Restaurar los estilos originales inmediatamente después de la captura
-        reportElement.style.height = originalHeight;
-        reportElement.style.overflow = originalOverflow;
+    if (result.global_metrics.material_type === 'roll') {
+        // --- LÓGICA PARA ROLLOS: Captura solo el primer .single-sheet-container ---
+        const rollElement = container.querySelector('.single-sheet-container');
+        if (!rollElement) return;
 
+        const canvas = await html2canvas(rollElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
         const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF({
-            orientation: 'p',
-            unit: 'mm',
-            format: 'a4',
-            compress: true
-        });
+        const imgWidth = pdfWidth - margin * 2;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        
+        pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
 
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const canvasWidth = canvas.width;
-        const canvasHeight = canvas.height;
-        const ratio = canvasWidth / canvasHeight;
+    } else {
+        // --- LÓGICA PARA LÁMINAS: Captura todos los .single-sheet-container ---
+        const sheetElements = container.querySelectorAll('.single-sheet-container');
+        if (sheetElements.length === 0) return;
 
-        let imgHeight = pdfWidth / ratio;
-        let heightLeft = imgHeight;
-        let position = 0;
+        for (const sheet of sheetElements) {
+            const canvas = await html2canvas(sheet, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+            const imgData = canvas.toDataURL('image/png');
+            const imgWidth = pdfWidth - margin * 2;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-        // Añadir la primera página
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-        heightLeft -= pdfHeight;
-
-        // Añadir más páginas si es necesario
-        while (heightLeft > 0) {
-            position = heightLeft - imgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-            heightLeft -= pdfHeight;
+            // Añadir nueva página si no cabe la siguiente lámina
+            if (yPos + imgHeight > pdfHeight - margin) {
+                pdf.addPage();
+                yPos = margin;
+            }
+            pdf.addImage(imgData, 'PNG', margin, yPos, imgWidth, imgHeight);
+            yPos += imgHeight + 10; // Espacio entre láminas
         }
-
-        pdf.save('reporte-de-optimizacion.pdf');
-    } catch (err) {
-        console.error("Error al generar el PDF:", err);
-        // Restaurar estilos también si hay un error
-        reportElement.style.height = originalHeight;
-        reportElement.style.overflow = originalOverflow;
     }
+
+    pdf.save('reporte-de-optimizacion.pdf');
   };
 
   const { global_metrics: metrics } = result || {};
@@ -143,12 +132,9 @@ function CuttingLayout({ result, isLoading, error }) {
           <span>Optimizando...</span>
         </div>
       )}
-      
-      {/* El ref se asigna al área que contiene todo lo que se va a imprimir */}
-      <div className="results-area" ref={resultsToPrintRef}>
+      <div className="results-area" ref={resultsContainerRef}>
         {error && <p className="error-message">{error}</p>}
         {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
-        
         {metrics && (
           <div className="results-summary">
             <h3>Resumen Global</h3>
@@ -163,14 +149,16 @@ function CuttingLayout({ result, isLoading, error }) {
             {result.impossible_to_place_ids?.length > 0 && <p className='warning-message'>IDs imposibles: {result.impossible_to_place_ids.join(', ')}</p>}
           </div>
         )}
-
         {result && result.sheets && result.sheets.length > 0 && (
-          <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
-            <FaFilePdf /> Descargar Reporte PDF
-          </button>
+            <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
+              <FaFilePdf /> Descargar Reporte PDF
+            </button>
         )}
         
-        {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
+        {/* Este contenedor de scroll ahora solo afecta la visualización en pantalla, no la exportación */}
+        <div className="sheets-list-container">
+          {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
+        </div>
       </div>
     </div>
   );
