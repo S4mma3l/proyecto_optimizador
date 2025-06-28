@@ -1,7 +1,8 @@
 import React, { useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf } from 'react-icons/fa';
+// La importación ya incluye FaExclamationTriangle, ahora lo usaremos.
+import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf, FaBoxes } from 'react-icons/fa';
 
 const generatePastelColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 85%)`;
 const getTextColorForBackground = () => 'black';
@@ -22,7 +23,6 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
             const baseId = p.id.split('-')[0];
             ctx.fillStyle = pieceColors.current.get(baseId) || 'gray'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
             ctx.fillRect(p.x, p.y, p.width, p.height); ctx.strokeRect(p.x, p.y, p.width, p.height);
-            // Mostrar texto si la pieza es lo suficientemente grande
             if (p.width > 30 && p.height > 20) {
               ctx.fillStyle = getTextColorForBackground();
               const fontSize = Math.max(10, Math.min(p.width, p.height) / 5);
@@ -78,7 +78,7 @@ function CuttingLayout({ result, isLoading, error }) {
     pdf.save('reporte-de-corte.pdf');
   };
 
-  const wastePercentage = result?.global_metrics?.waste_percentage;
+  const { global_metrics: metrics } = result || {};
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -90,34 +90,41 @@ function CuttingLayout({ result, isLoading, error }) {
           <span>Optimizando...</span>
         </div>
       )}
-      {error && <p className="error-message">{error}</p>}
-      {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
-      {result && result.global_metrics && (
-        <div className="results-summary">
-          <h3>Resumen Global</h3>
-          <div className="metrics-grid">
-            {result.global_metrics.material_type === 'sheet' ? (
-              <MetricCard icon={<FaCheckCircle />} title="Láminas Usadas" value={result.global_metrics.total_sheets_used} />
-            ) : (
-              <MetricCard icon={<FaTape />} title="Largo Consumido" value={`${(result.sheets?.[0]?.sheet_dimensions?.height ?? 0).toFixed(0)} mm`} />
-            )}
-            <MetricCard icon={<FaTh />} title="Piezas Colocadas" value={`${result.global_metrics.total_placed_pieces} / ${result.global_metrics.total_pieces}`} className={result.global_metrics.total_placed_pieces < result.global_metrics.total_pieces ? 'danger' : 'success'} />
-            {wastePercentage !== undefined && (
-              <MetricCard icon={<FaTrashAlt />} title="Desperdicio" value={`${wastePercentage}%`} className="warning" />
-            )}
-            {result.impossible_to_place_ids?.length > 0 && <MetricCard icon={<FaBan />} title="Piezas Imposibles" value={result.impossible_to_place_ids.length} className="danger" />}
-            {result.unplaced_piece_ids?.length > 0 && <MetricCard icon={<FaExclamationTriangle />} title="Piezas Sin Espacio" value={result.unplaced_piece_ids.length} className="danger" />}
+      <div className="results-area">
+        {error && <p className="error-message">{error}</p>}
+        {!isLoading && !error && !result && <p className="placeholder-text">Los resultados aparecerán aquí.</p>}
+        {metrics && (
+          <div className="results-summary">
+            <h3>Resumen Global</h3>
+            <div className="metrics-grid">
+              {metrics.material_type === 'sheet' ? (
+                <MetricCard icon={<FaCheckCircle />} title="Láminas Usadas" value={metrics.total_sheets_used} />
+              ) : (
+                <MetricCard icon={<FaTape />} title="Largo Consumido" value={`${(result.sheets?.[0]?.sheet_dimensions?.height ?? 0).toFixed(0)} mm`} />
+              )}
+              {metrics.total_material_area_sqm !== undefined && (
+                <MetricCard icon={<FaBoxes />} title="Material Usado" value={`${metrics.total_material_area_sqm} m²`} />
+              )}
+              <MetricCard icon={<FaTh />} title="Piezas Colocadas" value={`${metrics.total_placed_pieces} / ${metrics.total_pieces}`} className={metrics.total_placed_pieces < metrics.total_pieces ? 'danger' : 'success'} />
+              {metrics.waste_percentage !== undefined && (
+                <MetricCard icon={<FaTrashAlt />} title="Desperdicio" value={`${metrics.waste_percentage}%`} className="warning" />
+              )}
+              {result.impossible_to_place_ids?.length > 0 && <MetricCard icon={<FaBan />} title="Piezas Imposibles" value={result.impossible_to_place_ids.length} className="danger" />}
+              
+              {/* --- ¡TARJETA RESTAURADA AQUÍ! --- */}
+              {result.unplaced_piece_ids?.length > 0 && <MetricCard icon={<FaExclamationTriangle />} title="Piezas Sin Espacio" value={result.unplaced_piece_ids.length} className="danger" />}
+            </div>
+            {result.impossible_to_place_ids?.length > 0 && <p className='warning-message'>IDs imposibles: {result.impossible_to_place_ids.join(', ')}</p>}
           </div>
-          {result.impossible_to_place_ids?.length > 0 && <p className='warning-message'>IDs imposibles: {result.impossible_to_place_ids.join(', ')}</p>}
+        )}
+        {result && result.sheets && result.sheets.length > 0 && (
+            <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
+              <FaFilePdf /> Descargar Reporte PDF
+            </button>
+        )}
+        <div className="sheets-list-container" ref={resultsToPrintRef}>
+          {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
         </div>
-      )}
-      {result && result.sheets && result.sheets.length > 0 && (
-          <button onClick={handleDownloadPdf} className="button button-primary" style={{ marginBottom: '1.5rem', width: 'auto', alignSelf: 'flex-start' }}>
-            <FaFilePdf /> Descargar Reporte PDF
-          </button>
-      )}
-      <div className="sheets-list-container" ref={resultsToPrintRef}>
-        {result?.sheets?.map(sheetData => <SingleSheetLayout key={sheetData.sheet_index} sheetData={sheetData} pieceColors={pieceColors}/>)}
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List, Literal
 import rectpack
 
-# --- MODELOS DE DATOS (sin cambios) ---
+# --- MODELOS DE DATOS ---
 class Piece(BaseModel):
     id: str
     width: float
@@ -22,44 +22,41 @@ class OptimizationRequest(BaseModel):
     kerf: float = 0
     respect_grain: bool = False
 
-# --- CONFIGURACIÓN DE FASTAPI Y CORS (sin cambios) ---
+# --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Optimización de Corte v9 - Hyper-Optimization Iterativa",
-    description="API con torneo de algoritmos y empaquetado en múltiples láminas.",
-    version="9.0.0"
+    title="API de Optimización de Corte v9 - Hyper-Optimization Definitiva",
+    description="API con torneo de algoritmos, empaquetado iterativo y todas las métricas.",
+    version="9.1.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-# --- FUNCIÓN HELPER PARA EL TORNEO (CON LÓGICA ITERATIVA CORREGIDA) ---
+# --- FUNCIÓN HELPER PARA EL TORNEO ---
 def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
-    
-    # Preparamos las piezas para este algoritmo
     pieces_to_pack = [{'width': p.width + kerf, 'height': p.height + kerf, 'rid': p.id} for p in unpacked_pieces_data]
-    
     all_bins = []
 
     if material_type == 'roll':
-        # Para rollos, siempre usamos un solo "bin" gigante
         packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
         for p_data in pieces_to_pack: packer.add_rect(**p_data)
         packer.add_bin(width=sheet_width, height=9999999)
         packer.pack()
         all_bins.extend(packer)
     else:
-        # --- ¡LÓGICA ITERATIVA RESTAURADA PARA LÁMINAS! ---
         while pieces_to_pack:
             packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
             for p_data in pieces_to_pack: packer.add_rect(**p_data)
             packer.add_bin(width=sheet_width, height=sheet_height)
             packer.pack()
             
-            # Guardamos el primer (y único) bin que se procesó en esta iteración
-            all_bins.append(packer[0])
-
-            # Actualizamos la lista de piezas para la siguiente iteración
+            # Solo añadir el bin si contiene piezas
+            if packer[0]:
+                all_bins.append(packer[0])
+            
             placed_ids = {r.rid for r in packer[0]}
+            if not placed_ids: # Evitar bucle infinito si no se puede colocar nada más
+                break
             pieces_to_pack = [p for p in pieces_to_pack if p['rid'] not in placed_ids]
 
     # --- Calcular el "score" para este resultado ---
@@ -86,25 +83,15 @@ def optimize_layout(request: OptimizationRequest):
     unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height)
                        for p in request.pieces for i in range(p.quantity)]
 
-    # --- INICIO DEL TORNEO DE ALGORITMOS ---
     algos_to_test = [rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf, rectpack.GuillotineBssfSas]
-    all_results = []
-    for algo in algos_to_test:
-        result = run_one_packing_algorithm(
-            unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height,
-            request.kerf, not request.respect_grain, algo
-        )
-        all_results.append(result)
+    all_results = [run_one_packing_algorithm(unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height, request.kerf, not request.respect_grain, algo) for algo in algos_to_test]
 
-    # --- DETERMINAR EL GANADOR ---
     if request.material_type == 'roll':
         best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
         best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
     
     winner_bins = best_result['bins']
-
-    # --- PROCESAR EL RESULTADO DEL GANADOR ---
     packed_sheets, all_placed_ids, total_placed_piece_area, max_y_in_roll = [], set(), 0, 0
 
     for i, abin in enumerate(winner_bins):
@@ -123,15 +110,17 @@ def optimize_layout(request: OptimizationRequest):
 
     impossible_ids = [p.id for p in unpacked_pieces if p.id not in all_placed_ids]
     
-    # --- CALCULAR MÉTRICAS GLOBALES DEL GANADOR ---
     if request.material_type == 'roll' and packed_sheets:
         consumed_length = max_y_in_roll
         packed_sheets[0]['sheet_dimensions']['height'] = consumed_length if consumed_length > 0 else 1
         total_material_area = request.sheet.width * consumed_length
-        waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
     else:
         total_material_area = len(packed_sheets) * request.sheet.width * request.sheet.height
-        waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
+        
+    waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
+    
+    # --- MÉTRICA DE ÁREA TOTAL EN M² CORRECTAMENTE AÑADIDA ---
+    total_material_area_sqm = total_material_area / 1_000_000
 
     return {
         "sheets": packed_sheets,
@@ -142,6 +131,7 @@ def optimize_layout(request: OptimizationRequest):
             "total_sheets_used": len(packed_sheets),
             "total_pieces": len(unpacked_pieces),
             "total_placed_pieces": len(all_placed_ids),
-            "waste_percentage": round(waste_percentage, 2)
+            "waste_percentage": round(waste_percentage, 2),
+            "total_material_area_sqm": round(total_material_area_sqm, 2) # ¡Añadido aquí!
         }
     }
