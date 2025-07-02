@@ -5,32 +5,26 @@ from typing import List, Literal
 import rectpack
 import math
 
-# --- MODELOS DE DATOS ---
+# --- MODELOS DE DATOS (sin cambios) ---
 class Piece(BaseModel):
     id: str; width: float; height: float; quantity: int = 1
 class Sheet(BaseModel):
     width: float; height: float
 class OptimizationRequest(BaseModel):
-    material_type: Literal["sheet", "roll"]
-    sheet: Sheet
-    pieces: List[Piece]
-    kerf: float = 0
-    respect_grain: bool = False
-    cutting_speed_mms: float
-    sheet_thickness_mm: float = 0
-    cut_depth_per_pass_mm: float = 0
+    material_type: Literal["sheet", "roll"]; sheet: Sheet; pieces: List[Piece]; kerf: float = 0; respect_grain: bool = False
+    cutting_speed_mms: float; sheet_thickness_mm: float = 0; cut_depth_per_pass_mm: float = 0
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
     title="API de Hyper-Optimización de Corte",
-    description="API con torneo exhaustivo de algoritmos para resultados de máxima densidad.",
-    version="10.1.0"
+    description="API con torneo de algoritmos y heurísticas de ordenamiento para resultados de máxima densidad.",
+    version="11.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-# --- FUNCIÓN HELPER PARA EL TORNEO (sin cambios) ---
+# --- FUNCIÓN HELPER PARA EL TORNEO ---
 def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
     pieces_to_pack = [{'width': p.width + kerf, 'height': p.height + kerf, 'rid': p.id} for p in unpacked_pieces_data]
     all_bins = []
@@ -71,32 +65,43 @@ def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, 
 def optimize_layout(request: OptimizationRequest):
     unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height) for p in request.pieces for i in range(p.quantity)]
 
-    # --- INICIO DEL TORNEO DE ALGORITMOS EXHAUSTIVO ---
-    algos_to_test = [
-        # Algoritmos MaxRects (muy buenos para layouts complejos)
-        rectpack.MaxRectsBssf, # Best Short Side Fit
-        rectpack.MaxRectsBaf,  # Best Area Fit
-        rectpack.MaxRectsBlsf, # Best Long Side Fit
-        rectpack.MaxRectsBl,   # Bottom-Left
-        
-        # Algoritmos de Guillotina (simulan cortes de borde a borde)
-        rectpack.GuillotineBssfSas, # Shorter Axis Split
-        rectpack.GuillotineBssfLas, # Longer Axis Split
-        rectpack.GuillotineBssfSlas, # Shorter-Longer Axis Split
-        rectpack.GuillotineBafSas,
-        rectpack.GuillotineBafLas,
-        rectpack.GuillotineBlsfSas,
-        rectpack.GuillotineBlsfLas,
-    ]
+    # --- INICIO DEL TORNEO DE TORNEOS ---
     
-    all_results = [run_one_packing_algorithm(unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height, request.kerf, not request.respect_grain, algo) for algo in algos_to_test]
+    # 1. Definir las estrategias de ordenamiento
+    sorting_heuristics = {
+        "height": lambda p: p.height,
+        "width": lambda p: p.width,
+        "area": lambda p: p.width * p.height,
+        "perimeter": lambda p: 2 * (p.width + p.height),
+    }
 
-    # --- DETERMINAR EL GANADOR ---
+    # 2. Definir los algoritmos de empaquetado a probar
+    algos_to_test = [rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.GuillotineBssfSas]
+
+    all_results = []
+    
+    # 3. Iterar sobre cada estrategia de ordenamiento
+    for sort_name, sort_key in sorting_heuristics.items():
+        # Ordenar la lista de piezas según la heurística actual (de mayor a menor)
+        sorted_pieces = sorted(unpacked_pieces, key=sort_key, reverse=True)
+        
+        # 4. Por cada lista ordenada, ejecutar el torneo de algoritmos
+        for algo in algos_to_test:
+            result = run_one_packing_algorithm(
+                sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
+                request.kerf, not request.respect_grain, algo
+            )
+            # Guardamos el resultado junto con la estrategia que lo generó (para depuración)
+            result['strategy'] = f"{sort_name}_{algo.__name__}"
+            all_results.append(result)
+
+    # --- 5. DETERMINAR EL CAMPEÓN ABSOLUTO ---
     if request.material_type == 'roll':
         best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
         best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
     
+    print(f"Estrategia ganadora: {best_result.get('strategy', 'N/A')}")
     winner_bins = best_result['bins']
     
     # --- PROCESAR Y DEVOLVER EL RESULTADO DEL CAMPEÓN ---
