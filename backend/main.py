@@ -23,32 +23,29 @@ class OptimizationRequest(BaseModel):
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
     title="API de Hyper-Optimización de Corte",
-    description="API con torneo de algoritmos para resultados de máxima densidad.",
-    version="10.0.0"
+    description="API con torneo exhaustivo de algoritmos para resultados de máxima densidad.",
+    version="10.1.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-# --- FUNCIÓN HELPER PARA EL TORNEO ---
+# --- FUNCIÓN HELPER PARA EL TORNEO (sin cambios) ---
 def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
     pieces_to_pack = [{'width': p.width + kerf, 'height': p.height + kerf, 'rid': p.id} for p in unpacked_pieces_data]
     all_bins = []
-
     if material_type == 'roll':
         packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
         for p_data in pieces_to_pack: packer.add_rect(**p_data)
-        packer.add_bin(width=sheet_width, height=9999999) # Altura "infinita"
+        packer.add_bin(width=sheet_width, height=9999999)
         packer.pack()
         all_bins.extend(packer)
     else:
-        # Lógica iterativa para láminas
         while pieces_to_pack:
             packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
             for p_data in pieces_to_pack: packer.add_rect(**p_data)
             packer.add_bin(width=sheet_width, height=sheet_height)
             packer.pack()
-            
             if len(packer) > 0 and packer[0]:
                 all_bins.append(packer[0])
                 placed_ids = {r.rid for r in packer[0]}
@@ -56,8 +53,7 @@ def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, 
                 pieces_to_pack = [p for p in pieces_to_pack if p['rid'] not in placed_ids]
             else:
                 break
-
-    # Calcular el "score" para este resultado
+    
     if material_type == 'roll':
         max_y = max((r.y + r.height for r in all_bins[0]), default=0) if all_bins and all_bins[0] else 0
         score = {'consumed_length': max_y}
@@ -75,12 +71,22 @@ def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, 
 def optimize_layout(request: OptimizationRequest):
     unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height) for p in request.pieces for i in range(p.quantity)]
 
-    # --- INICIO DEL TORNEO DE ALGORITMOS ---
+    # --- INICIO DEL TORNEO DE ALGORITMOS EXHAUSTIVO ---
     algos_to_test = [
-        rectpack.MaxRectsBssf, # Best Short Side Fit: Bueno para compactar.
-        rectpack.MaxRectsBaf,  # Best Area Fit: Bueno para minimizar área de desecho.
-        rectpack.MaxRectsBlsf, # Best Long Side Fit: Otra estrategia de contacto.
-        rectpack.GuillotineBssfSas, # Estrategia de guillotina, muy diferente.
+        # Algoritmos MaxRects (muy buenos para layouts complejos)
+        rectpack.MaxRectsBssf, # Best Short Side Fit
+        rectpack.MaxRectsBaf,  # Best Area Fit
+        rectpack.MaxRectsBlsf, # Best Long Side Fit
+        rectpack.MaxRectsBl,   # Bottom-Left
+        
+        # Algoritmos de Guillotina (simulan cortes de borde a borde)
+        rectpack.GuillotineBssfSas, # Shorter Axis Split
+        rectpack.GuillotineBssfLas, # Longer Axis Split
+        rectpack.GuillotineBssfSlas, # Shorter-Longer Axis Split
+        rectpack.GuillotineBafSas,
+        rectpack.GuillotineBafLas,
+        rectpack.GuillotineBlsfSas,
+        rectpack.GuillotineBlsfLas,
     ]
     
     all_results = [run_one_packing_algorithm(unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height, request.kerf, not request.respect_grain, algo) for algo in algos_to_test]
@@ -89,13 +95,11 @@ def optimize_layout(request: OptimizationRequest):
     if request.material_type == 'roll':
         best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
-        # Para láminas, el ganador es el que usa menos láminas.
-        # Si empatan, el que tiene menos desperdicio en la última lámina.
         best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
     
     winner_bins = best_result['bins']
     
-    # --- PROCESAR Y DEVOLVER EL RESULTADO DEL GANADOR ---
+    # --- PROCESAR Y DEVOLVER EL RESULTADO DEL CAMPEÓN ---
     packed_sheets, all_placed_ids, total_placed_piece_area, max_y_in_roll = [], set(), 0, 0
     total_cut_length_mm = 0
 
