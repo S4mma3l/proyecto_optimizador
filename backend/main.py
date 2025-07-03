@@ -17,7 +17,7 @@ class OptimizationRequest(BaseModel):
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
     title="API de Hyper-Optimización de Corte",
-    description="API con torneo de algoritmos y heurísticas de ordenamiento para resultados de máxima densidad.",
+    description="API con torneo exhaustivo de algoritmos y heurísticas de ordenamiento para resultados de máxima densidad.",
     version="11.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
@@ -67,22 +67,26 @@ def optimize_layout(request: OptimizationRequest):
 
     # --- INICIO DEL TORNEO DE TORNEOS ---
     
-    # 1. Definir las estrategias de ordenamiento
+    # 1. Definir las estrategias de ordenamiento (heurísticas)
     sorting_heuristics = {
-        "height": lambda p: p.height,
-        "width": lambda p: p.width,
-        "area": lambda p: p.width * p.height,
-        "perimeter": lambda p: 2 * (p.width + p.height),
+        "height_desc": lambda p: p.height,
+        "width_desc": lambda p: p.width,
+        "area_desc": lambda p: p.width * p.height,
+        "perimeter_desc": lambda p: 2 * (p.width + p.height),
     }
 
     # 2. Definir los algoritmos de empaquetado a probar
-    algos_to_test = [rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.GuillotineBssfSas]
+    algos_to_test = [
+        rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf, rectpack.MaxRectsBl,
+        rectpack.GuillotineBssfSas, rectpack.GuillotineBssfLas, rectpack.GuillotineBssfSlas,
+        rectpack.GuillotineBafSas, rectpack.GuillotineBafLas,
+        rectpack.GuillotineBlsfSas, rectpack.GuillotineBlsfLas,
+    ]
 
     all_results = []
     
     # 3. Iterar sobre cada estrategia de ordenamiento
     for sort_name, sort_key in sorting_heuristics.items():
-        # Ordenar la lista de piezas según la heurística actual (de mayor a menor)
         sorted_pieces = sorted(unpacked_pieces, key=sort_key, reverse=True)
         
         # 4. Por cada lista ordenada, ejecutar el torneo de algoritmos
@@ -91,7 +95,6 @@ def optimize_layout(request: OptimizationRequest):
                 sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
                 request.kerf, not request.respect_grain, algo
             )
-            # Guardamos el resultado junto con la estrategia que lo generó (para depuración)
             result['strategy'] = f"{sort_name}_{algo.__name__}"
             all_results.append(result)
 
