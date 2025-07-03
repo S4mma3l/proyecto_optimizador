@@ -5,15 +5,17 @@ from typing import List, Literal
 import math
 from ortools.sat.python import cp_model
 
-# --- MODELOS DE DATOS (Tu versión, sin cambios) ---
+# --- MODELOS DE DATOS ---
 class Piece(BaseModel):
     id: str
     width: float
     height: float
     quantity: int = 1
+
 class Sheet(BaseModel):
     width: float
     height: float
+
 class OptimizationRequest(BaseModel):
     material_type: Literal["sheet", "roll"]
     sheet: Sheet
@@ -24,18 +26,18 @@ class OptimizationRequest(BaseModel):
     sheet_thickness_mm: float = 0
     cut_depth_per_pass_mm: float = 0
 
-# --- CONFIGURACIÓN DE FASTAPI Y CORS (sin cambios) ---
+# --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Optimización de Corte con Google OR-Tools v12.2",
-    description="Solver mejorado con corrección de TypeError para rotación avanzada.",
-    version="12.2.0"
+    title="API de Optimización de Corte con Google OR-Tools v13",
+    description="Solver de máxima densidad con correcciones lógicas para láminas y rollos.",
+    version="13.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.post("/api/optimize")
 def optimize_layout(request: OptimizationRequest):
-    # 1. Desempaquetar piezas (tu lógica)
+    # 1. Desempaquetar piezas y añadir kerf
     unpacked_pieces = []
     original_pieces_map = {}
     for piece in request.pieces:
@@ -48,88 +50,94 @@ def optimize_layout(request: OptimizationRequest):
             })
             original_pieces_map[new_id] = piece
 
-    # 2. Configurar dimensiones (tu lógica)
     sheet_width = int(request.sheet.width)
     sheet_height_limit = sum(p['height'] for p in unpacked_pieces) if request.material_type == 'roll' else int(request.sheet.height)
     rotation_allowed = not request.respect_grain
     
     model = cp_model.CpModel()
 
-    # --- VARIABLES (tu lógica) ---
+    # --- VARIABLES MEJORADAS ---
     x_vars = {p['id']: model.NewIntVar(0, sheet_width, f"x_{p['id']}") for p in unpacked_pieces}
     y_vars = {p['id']: model.NewIntVar(0, sheet_height_limit, f"y_{p['id']}") for p in unpacked_pieces}
-    rotated_vars = {p['id']: model.NewBoolVar(f"r_{p['id']}") for p in unpacked_pieces if rotation_allowed and p['width'] != p['height']}
     
-    # --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-    x_intervals, y_intervals = {}, {}
+    x_intervals = {}
+    y_intervals = {}
+    rotated_vars = {} # Para almacenar la decisión de rotación del solver
+
     for p in unpacked_pieces:
+        p_id = p['id']
         width, height = p['width'], p['height']
         
-        # Variables para las dimensiones efectivas
-        effective_w = model.NewIntVar(0, sheet_width, f"w_{p['id']}")
-        effective_h = model.NewIntVar(0, sheet_height_limit, f"h_{p['id']}")
+        if rotation_allowed and width != height:
+            # Si se permite la rotación, creamos dos conjuntos de intervalos opcionales
+            # is_rotated es una variable booleana que el solver decidirá
+            is_rotated = model.NewBoolVar(f"rotated_{p_id}")
+            rotated_vars[p_id] = is_rotated
 
-        # Variables para las coordenadas finales
-        end_x = model.NewIntVar(0, sheet_width, f"end_x_{p['id']}")
-        end_y = model.NewIntVar(0, sheet_height_limit, f"end_y_{p['id']}")
+            # Intervalos para la orientación original (si NO está rotada)
+            x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, is_rotated.Not(), f"xi_{p_id}")
+            y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, is_rotated.Not(), f"yi_{p_id}")
 
-        if p['id'] in rotated_vars:
-            is_rotated = rotated_vars[p['id']]
-            # Si se rota, las dimensiones se intercambian
-            model.Add(effective_w == height).OnlyEnforceIf(is_rotated)
-            model.Add(effective_h == width).OnlyEnforceIf(is_rotated)
-            # Si no se rota, mantienen sus dimensiones originales
-            model.Add(effective_w == width).OnlyEnforceIf(is_rotated.Not())
-            model.Add(effective_h == height).OnlyEnforceIf(is_rotated.Not())
+            # Intervalos para la orientación rotada (si SÍ está rotada)
+            x_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(x_vars[p_id], height, x_vars[p_id] + height, is_rotated, f"xi_rot_{p_id}")
+            y_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(y_vars[p_id], width, y_vars[p_id] + width, is_rotated, f"yi_rot_{p_id}")
         else:
-            # Si no se permite rotación, las dimensiones son fijas
-            model.Add(effective_w == width)
-            model.Add(effective_h == height)
-        
-        # Enlazar las coordenadas de fin con las de inicio y el tamaño
-        model.Add(end_x == x_vars[p['id']] + effective_w)
-        model.Add(end_y == y_vars[p['id']] + effective_h)
-        
-        # Ahora sí, crear las variables de intervalo con expresiones válidas
-        x_intervals[p['id']] = model.NewIntervalVar(x_vars[p['id']], effective_w, end_x, f"xi_{p['id']}")
-        y_intervals[p['id']] = model.NewIntervalVar(y_vars[p['id']], effective_h, end_y, f"yi_{p['id']}")
+            # Si no se permite rotación, creamos intervalos normales obligatorios
+            x_intervals[p_id] = model.NewIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, f"xi_{p_id}")
+            y_intervals[p_id] = model.NewIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, f"yi_{p_id}")
 
-    # --- RESTRICCIONES (tu lógica, ahora funciona) ---
+    # --- RESTRICCIONES CORREGIDAS ---
+    # 1. No solapamiento: Esta restricción ahora maneja correctamente los intervalos opcionales
     model.AddNoOverlap2D(list(x_intervals.values()), list(y_intervals.values()))
-    
-    for p in unpacked_pieces:
-        model.Add(x_vars[p['id']] + x_intervals[p['id']].SizeExpr() <= sheet_width)
-        if request.material_type == 'sheet':
-            model.Add(y_vars[p['id']] + y_intervals[p['id']].SizeExpr() <= sheet_height_limit)
 
-    # --- OBJETIVO (tu lógica) ---
+    # 2. Límites del contenedor: Usar EndExpr() es la forma robusta
+    for interval in x_intervals.values():
+        model.Add(interval.EndExpr() <= sheet_width)
+    for interval in y_intervals.values():
+        if request.material_type == 'sheet':
+            model.Add(interval.EndExpr() <= sheet_height_limit)
+
+    # --- OBJETIVO: MINIMIZAR LA ALTURA TOTAL ---
     max_height_var = model.NewIntVar(0, sheet_height_limit, 'max_height')
-    for p in unpacked_pieces:
-        model.Add(max_height_var >= y_vars[p['id']] + y_intervals[p['id']].SizeExpr())
+    for p_id in unpacked_pieces:
+        # La altura final de una pieza es su y_var más la altura del intervalo que esté activo
+        # Si la pieza puede rotar, debemos considerar ambas posibilidades
+        if f"{p_id['id']}_rot" in y_intervals:
+            model.Add(max_height_var >= y_intervals[p_id['id']].EndExpr()).OnlyEnforceIf(rotated_vars[p_id['id']].Not())
+            model.Add(max_height_var >= y_intervals[f"{p_id['id']}_rot"].EndExpr()).OnlyEnforceIf(rotated_vars[p_id['id']])
+        else:
+            model.Add(max_height_var >= y_intervals[p_id['id']].EndExpr())
+            
     model.Minimize(max_height_var)
     
-    # --- RESOLVER EL PROBLEMA (tu lógica) ---
+    # --- RESOLVER EL PROBLEMA ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 20.0
+    solver.parameters.max_time_in_seconds = 25.0
     status = solver.Solve(model)
 
-    # --- PROCESAR RESULTADOS (tu lógica) ---
+    # --- PROCESAR RESULTADOS ---
     placed_pieces = []
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         for p_data in unpacked_pieces:
             p_id = p_data['id']
-            is_rotated = solver.Value(rotated_vars[p_id]) if p_id in rotated_vars else False
-            original_piece = original_pieces_map[p_id]
-            
-            placed_pieces.append({
-                "id": p_id,
-                "x": solver.Value(x_vars[p_id]), "y": solver.Value(y_vars[p_id]),
-                "width": original_piece.width if not is_rotated else original_piece.height,
-                "height": original_piece.height if not is_rotated else original_piece.width,
-                "rotated": is_rotated
-            })
+            # Para que una pieza se considere colocada, su intervalo X debe estar activo
+            if solver.BooleanValue(x_intervals[p_id].IsPresent()):
+                original_piece = original_pieces_map[p_id]
+                is_rotated = False
+                
+                # Si la pieza fue rotada, obtenemos sus dimensiones rotadas
+                if f"{p_id}_rot" in x_intervals and solver.BooleanValue(x_intervals[f"{p_id}_rot"].IsPresent()):
+                    is_rotated = True
+                
+                placed_pieces.append({
+                    "id": p_id,
+                    "x": solver.Value(x_vars[p_id]),
+                    "y": solver.Value(y_vars[p_id]),
+                    "width": original_piece.width if not is_rotated else original_piece.height,
+                    "height": original_piece.height if not is_rotated else original_piece.width,
+                    "rotated": is_rotated
+                })
 
-    # --- El resto de tu código es idéntico y correcto ---
     all_placed_ids = {p['id'] for p in placed_pieces}
     impossible_ids = [p_id for p_id in original_pieces_map if p_id not in all_placed_ids]
     
@@ -139,7 +147,7 @@ def optimize_layout(request: OptimizationRequest):
     if request.material_type == 'roll':
         consumed_length = solver.ObjectiveValue()
         total_material_area = request.sheet.width * consumed_length
-        final_sheet_height = consumed_length
+        final_sheet_height = consumed_length if consumed_length > 0 else 1
     else:
         total_material_area = request.sheet.width * request.sheet.height
         final_sheet_height = request.sheet.height
@@ -154,7 +162,7 @@ def optimize_layout(request: OptimizationRequest):
     total_path_distance = total_cut_length_mm * num_passes
     estimated_time_seconds = total_path_distance / request.cutting_speed_mms if request.cutting_speed_mms > 0 else 0
     
-    # NOTA: Este solver actual solo maneja 1 lámina.
+    # NOTA: Este solver actual solo maneja 1 lámina. La lógica de múltiples láminas con OR-Tools es mucho más compleja.
     return {
         "sheets": [{
             "sheet_index": 1,
