@@ -28,18 +28,16 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Optimización con OR-Tools (Final y Estable)",
-    description="Solver de máxima densidad con rotación nativa y empaquetado múltiple.",
-    version="15.0.0"
+    title="API de Optimización con OR-Tools (Estable y Correcta)",
+    description="Solver de máxima densidad con corrección de lógica booleana.",
+    version="15.1.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-
-# --- FUNCIÓN HELPER PARA OPTIMIZAR UN SOLO BIN ---
 def solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed, kerf):
     model = cp_model.CpModel()
-
+    
     # Crear variables para cada pieza
     x_vars = {p['id']: model.NewIntVar(0, sheet_width, f"x_{p['id']}") for p in pieces_to_pack}
     y_vars = {p['id']: model.NewIntVar(0, sheet_height, f"y_{p['id']}") for p in pieces_to_pack}
@@ -49,24 +47,34 @@ def solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed
     placed_literals = {p['id']: model.NewBoolVar(f"p_{p['id']}") for p in pieces_to_pack}
 
     for p in pieces_to_pack:
-        p_id = p['id']
-        width, height = p['width'] + kerf, p['height'] + kerf
+        p_id, width, height = p['id'], p['width'] + kerf, p['height'] + kerf
         
-        # Variables de intervalo opcionales para ambas orientaciones
+        # --- LÓGICA CORREGIDA PARA ROTACIÓN ---
+        # Creamos intervalos opcionales para ambas orientaciones posibles
         if rotation_allowed and width != height:
+            # is_rotated es una variable booleana que el solver decidirá
             is_rotated = model.NewBoolVar(f"r_{p_id}")
             rotated_vars[p_id] = is_rotated
             
-            # Si se coloca, debe estar en una de las dos orientaciones
-            # Intervalos si NO está rotada
-            x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, placed_literals[p_id].And(is_rotated.Not()), f"xi_{p_id}")
-            y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, placed_literals[p_id].And(is_rotated.Not()), f"yi_{p_id}")
+            # Un literal que es verdadero si la pieza se coloca Y NO se rota
+            not_rotated_literal = model.NewBoolVar(f"nr_{p_id}")
+            model.AddBoolAnd([placed_literals[p_id], is_rotated.Not()]).OnlyEnforceIf(not_rotated_literal)
+            model.AddImplication(not_rotated_literal, placed_literals[p_id])
+            model.AddImplication(not_rotated_literal, is_rotated.Not())
 
-            # Intervalos si SÍ está rotada
-            x_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(x_vars[p_id], height, x_vars[p_id] + height, placed_literals[p_id].And(is_rotated), f"xi_rot_{p_id}")
-            y_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(y_vars[p_id], width, y_vars[p_id] + width, placed_literals[p_id].And(is_rotated), f"yi_rot_{p_id}")
+            # Un literal que es verdadero si la pieza se coloca Y SÍ se rota
+            rotated_literal = model.NewBoolVar(f"rot_{p_id}")
+            model.AddBoolAnd([placed_literals[p_id], is_rotated]).OnlyEnforceIf(rotated_literal)
+            model.AddImplication(rotated_literal, placed_literals[p_id])
+            model.AddImplication(rotated_literal, is_rotated)
+
+            x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, not_rotated_literal, f"xi_{p_id}")
+            y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, not_rotated_literal, f"yi_{p_id}")
+
+            x_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(x_vars[p_id], height, x_vars[p_id] + height, rotated_literal, f"xi_rot_{p_id}")
+            y_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(y_vars[p_id], width, y_vars[p_id] + width, rotated_literal, f"yi_rot_{p_id}")
         else:
-            # Si no se permite rotación, creamos intervalos normales opcionales (solo una orientación)
+            # Si no se permite rotación, creamos intervalos normales opcionales
             x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, placed_literals[p_id], f"xi_{p_id}")
             y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, placed_literals[p_id], f"yi_{p_id}")
 
@@ -77,7 +85,7 @@ def solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed
     for interval in x_intervals.values(): model.Add(interval.EndExpr() <= sheet_width)
     for interval in y_intervals.values(): model.Add(interval.EndExpr() <= sheet_height)
     
-    # Objetivo: Maximizar el área total de las piezas colocadas en este bin
+    # Objetivo: Maximizar el área total de las piezas colocadas
     model.Maximize(sum(p['width'] * p['height'] * placed_literals[p['id']] for p in pieces_to_pack))
 
     solver = cp_model.CpSolver()
@@ -88,11 +96,13 @@ def solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         for p_data in pieces_to_pack:
             if solver.BooleanValue(placed_literals[p_data['id']]):
-                is_rotated = solver.Value(rotated_vars.get(p_data['id'])) if p_data['id'] in rotated_vars else False
+                is_rotated = solver.Value(rotated_vars.get(p_data['id'], 0)) # Usar .get con valor por defecto
                 placed_in_this_bin.append({
                     "id": p_data['id'],
-                    "x": solver.Value(x_vars[p_data['id']]), "y": solver.Value(y_vars[p_data['id']]),
-                    "width": p_data['width'], "height": p_data['height'], "rotated": is_rotated
+                    "x": solver.Value(x_vars[p_data['id']]),
+                    "y": solver.Value(y_vars[p_data['id']]),
+                    "width": p_data['width'], "height": p_data['height'],
+                    "rotated": bool(is_rotated)
                 })
     return placed_in_this_bin
 
@@ -122,11 +132,17 @@ def optimize_layout(request: OptimizationRequest):
             print("No se pudieron colocar más piezas.")
             break
             
+        # Revertir el kerf para la respuesta y obtener dimensiones originales
         placed_this_run = []
-        for p in placed_this_run_raw:
+        for p_raw in placed_this_run_raw:
+            is_rotated = p_raw['rotated']
+            width_no_kerf = (p_raw['width'] if not is_rotated else p_raw['height']) - kerf
+            height_no_kerf = (p_raw['height'] if not is_rotated else p_raw['width']) - kerf
+            
             placed_this_run.append({
-                "id": p['id'], "x": p['x'], "y": p['y'], "rotated": p['rotated'],
-                "width": p['width'], "height": p['height']
+                "id": p_raw['id'], "x": p_raw['x'], "y": p_raw['y'],
+                "width": width_no_kerf, "height": height_no_kerf,
+                "rotated": is_rotated
             })
             
         packed_sheets.append({
