@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Literal
+import rectpack
 import math
-from ortools.sat.python import cp_model
 
 # --- MODELOS DE DATOS ---
 class Piece(BaseModel):
@@ -28,141 +28,113 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Optimización con OR-Tools (Estable y Correcta)",
-    description="Solver de máxima densidad con corrección de lógica booleana.",
-    version="15.1.0"
+    title="API de Optimización de Corte (Kerf Corregido)",
+    description="Motor con torneo de algoritmos rectpack y manejo preciso del kerf.",
+    version="16.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-def solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed, kerf):
-    model = cp_model.CpModel()
-    
-    # Crear variables para cada pieza
-    x_vars = {p['id']: model.NewIntVar(0, sheet_width, f"x_{p['id']}") for p in pieces_to_pack}
-    y_vars = {p['id']: model.NewIntVar(0, sheet_height, f"y_{p['id']}") for p in pieces_to_pack}
-    
-    x_intervals, y_intervals = {}, {}
-    rotated_vars = {}
-    placed_literals = {p['id']: model.NewBoolVar(f"p_{p['id']}") for p in pieces_to_pack}
 
-    for p in pieces_to_pack:
-        p_id, width, height = p['id'], p['width'] + kerf, p['height'] + kerf
-        
-        # --- LÓGICA CORREGIDA PARA ROTACIÓN ---
-        # Creamos intervalos opcionales para ambas orientaciones posibles
-        if rotation_allowed and width != height:
-            # is_rotated es una variable booleana que el solver decidirá
-            is_rotated = model.NewBoolVar(f"r_{p_id}")
-            rotated_vars[p_id] = is_rotated
+# --- FUNCIÓN HELPER PARA EL TORNEO DE ALGORITMOS RECTPACK ---
+def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
+    # --- LÓGICA DE KERF CORRECTA: Se suma el kerf a cada pieza antes de optimizar ---
+    pieces_to_pack = [{'width': p['width'] + kerf, 'height': p['height'] + kerf, 'rid': p.get('id')} for p in unpacked_pieces_data]
+    
+    all_bins = []
+    
+    if material_type == 'roll':
+        packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
+        for p_data in pieces_to_pack: packer.add_rect(**p_data)
+        packer.add_bin(width=sheet_width, height=9999999) # Altura "infinita" para rollos
+        packer.pack()
+        all_bins.extend(packer)
+    else:
+        # Lógica iterativa para láminas
+        while pieces_to_pack:
+            packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
+            for p_data in pieces_to_pack: packer.add_rect(**p_data)
+            packer.add_bin(width=sheet_width, height=sheet_height)
+            packer.pack()
             
-            # Un literal que es verdadero si la pieza se coloca Y NO se rota
-            not_rotated_literal = model.NewBoolVar(f"nr_{p_id}")
-            model.AddBoolAnd([placed_literals[p_id], is_rotated.Not()]).OnlyEnforceIf(not_rotated_literal)
-            model.AddImplication(not_rotated_literal, placed_literals[p_id])
-            model.AddImplication(not_rotated_literal, is_rotated.Not())
-
-            # Un literal que es verdadero si la pieza se coloca Y SÍ se rota
-            rotated_literal = model.NewBoolVar(f"rot_{p_id}")
-            model.AddBoolAnd([placed_literals[p_id], is_rotated]).OnlyEnforceIf(rotated_literal)
-            model.AddImplication(rotated_literal, placed_literals[p_id])
-            model.AddImplication(rotated_literal, is_rotated)
-
-            x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, not_rotated_literal, f"xi_{p_id}")
-            y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, not_rotated_literal, f"yi_{p_id}")
-
-            x_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(x_vars[p_id], height, x_vars[p_id] + height, rotated_literal, f"xi_rot_{p_id}")
-            y_intervals[f"{p_id}_rot"] = model.NewOptionalIntervalVar(y_vars[p_id], width, y_vars[p_id] + width, rotated_literal, f"yi_rot_{p_id}")
-        else:
-            # Si no se permite rotación, creamos intervalos normales opcionales
-            x_intervals[p_id] = model.NewOptionalIntervalVar(x_vars[p_id], width, x_vars[p_id] + width, placed_literals[p_id], f"xi_{p_id}")
-            y_intervals[p_id] = model.NewOptionalIntervalVar(y_vars[p_id], height, y_vars[p_id] + height, placed_literals[p_id], f"yi_{p_id}")
-
-    # Restricción de no solapamiento
-    model.AddNoOverlap2D(list(x_intervals.values()), list(y_intervals.values()))
-
-    # Restricción de límites
-    for interval in x_intervals.values(): model.Add(interval.EndExpr() <= sheet_width)
-    for interval in y_intervals.values(): model.Add(interval.EndExpr() <= sheet_height)
+            if len(packer) > 0 and packer[0]:
+                all_bins.append(packer[0])
+                placed_ids = {r.rid for r in packer[0]}
+                if not placed_ids: break
+                pieces_to_pack = [p for p in pieces_to_pack if p['rid'] not in placed_ids]
+            else:
+                break
     
-    # Objetivo: Maximizar el área total de las piezas colocadas
-    model.Maximize(sum(p['width'] * p['height'] * placed_literals[p['id']] for p in pieces_to_pack))
+    # Calcular el "score" para este resultado
+    if material_type == 'roll':
+        max_y = max((r.y + r.height for r in all_bins[0]), default=0) if all_bins and all_bins[0] else 0
+        score = {'consumed_length': max_y}
+    else:
+        num_sheets = len(all_bins)
+        waste = 0
+        if num_sheets > 0:
+            last_bin = all_bins[-1]
+            total_area_of_pieces_in_bin = sum(r.width * r.height for r in last_bin)
+            waste = (last_bin.width * last_bin.height) - total_area_of_pieces_in_bin
+        score = {'sheets_used': num_sheets, 'waste_on_last': waste}
+    return {'bins': all_bins, 'score': score}
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 20.0
-    status = solver.Solve(model)
-
-    placed_in_this_bin = []
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        for p_data in pieces_to_pack:
-            if solver.BooleanValue(placed_literals[p_data['id']]):
-                is_rotated = solver.Value(rotated_vars.get(p_data['id'], 0)) # Usar .get con valor por defecto
-                placed_in_this_bin.append({
-                    "id": p_data['id'],
-                    "x": solver.Value(x_vars[p_data['id']]),
-                    "y": solver.Value(y_vars[p_data['id']]),
-                    "width": p_data['width'], "height": p_data['height'],
-                    "rotated": bool(is_rotated)
-                })
-    return placed_in_this_bin
 
 @app.post("/api/optimize")
 def optimize_layout(request: OptimizationRequest):
-    unpacked_pieces_input = []
-    for piece in request.pieces:
-        for i in range(piece.quantity):
-            unpacked_pieces_input.append({"id": f"{piece.id}-{i+1}" if piece.quantity > 1 else piece.id, "width": int(piece.width), "height": int(piece.height)})
+    unpacked_pieces = [
+        {"id": f"{p.id}-{i+1}" if p.quantity > 1 else p.id, "width": p.width, "height": p.height}
+        for p in request.pieces for i in range(p.quantity)
+    ]
 
-    sheet_width = int(request.sheet.width)
-    sheet_height = 9999999 if request.material_type == 'roll' else int(request.sheet.height)
-    kerf = int(request.kerf)
-    rotation_allowed = not request.respect_grain
+    # Torneo de algoritmos
+    algos_to_test = [rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.GuillotineBafSas]
+    all_results = [
+        run_one_packing_algorithm(
+            unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height,
+            request.kerf, not request.respect_grain, algo
+        ) for algo in algos_to_test
+    ]
+
+    # Determinar el ganador
+    if request.material_type == 'roll':
+        best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
+    else:
+        best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
     
-    pieces_to_pack = list(unpacked_pieces_input)
+    winner_bins = best_result['bins']
+    
+    # Procesar resultados del ganador
     packed_sheets = []
-    sheet_index = 0
+    all_placed_ids = set()
+    total_placed_piece_area = 0
+    total_cut_length_mm = 0
+    max_y_in_roll = 0
 
-    while pieces_to_pack:
-        sheet_index += 1
-        print(f"--- Optimizando Lámina #{sheet_index} con {len(pieces_to_pack)} piezas restantes ---")
-        
-        placed_this_run_raw = solve_single_bin(pieces_to_pack, sheet_width, sheet_height, rotation_allowed, kerf)
-        
-        if not placed_this_run_raw:
-            print("No se pudieron colocar más piezas.")
-            break
+    for i, abin in enumerate(winner_bins):
+        if not abin: continue
+        sheet_data = {"sheet_index": i + 1, "sheet_dimensions": {"width": abin.width, "height": abin.height}, "placed_pieces": [], "metrics": {}}
+        for r in abin:
+            all_placed_ids.add(r.rid)
             
-        # Revertir el kerf para la respuesta y obtener dimensiones originales
-        placed_this_run = []
-        for p_raw in placed_this_run_raw:
-            is_rotated = p_raw['rotated']
-            width_no_kerf = (p_raw['width'] if not is_rotated else p_raw['height']) - kerf
-            height_no_kerf = (p_raw['height'] if not is_rotated else p_raw['width']) - kerf
+            # Restar el kerf para obtener las dimensiones y posiciones REALES de la pieza
+            pw, ph = r.width - request.kerf, r.height - request.kerf
+            original_piece = next((p for p in unpacked_pieces if p['id'] == r.rid), None)
+            is_rotated = (pw != original_piece['width']) if original_piece and not request.respect_grain else False
             
-            placed_this_run.append({
-                "id": p_raw['id'], "x": p_raw['x'], "y": p_raw['y'],
-                "width": width_no_kerf, "height": height_no_kerf,
-                "rotated": is_rotated
-            })
-            
-        packed_sheets.append({
-            "sheet_index": sheet_index,
-            "sheet_dimensions": {"width": sheet_width, "height": sheet_height},
-            "placed_pieces": placed_this_run, "metrics": {"piece_count": len(placed_this_run)}
-        })
+            sheet_data["placed_pieces"].append({"id": r.rid, "x": r.x, "y": r.y, "width": pw, "height": ph, "rotated": is_rotated})
+            total_placed_piece_area += pw * ph
+            total_cut_length_mm += 2 * (pw + ph)
+            if r.y + r.height > max_y_in_roll: max_y_in_roll = r.y + r.height
         
-        placed_ids = {p['id'] for p in placed_this_run}
-        pieces_to_pack = [p for p in pieces_to_pack if p['id'] not in placed_ids]
+        sheet_data["metrics"]["piece_count"] = len(abin)
+        packed_sheets.append(sheet_data)
+
+    impossible_ids = [p['id'] for p in unpacked_pieces if p['id'] not in all_placed_ids]
     
-    all_placed_ids = {p['id'] for s in packed_sheets for p in s['placed_pieces']}
-    impossible_ids = [p['id'] for p in unpacked_pieces_input if p['id'] not in all_placed_ids]
-    
-    total_placed_piece_area = sum(p['width'] * p['height'] for s in packed_sheets for p in s['placed_pieces'])
-    total_cut_length_mm = sum(2 * (p['width'] + p['height']) for s in packed_sheets for p in s['placed_pieces'])
-    
+    # Calcular métricas globales
     if request.material_type == 'roll' and packed_sheets:
-        max_y = max((p['y'] + p['height'] + kerf for p in packed_sheets[0]['placed_pieces']), default=0)
-        consumed_length = max_y
+        consumed_length = max_y_in_roll
         packed_sheets[0]['sheet_dimensions']['height'] = consumed_length if consumed_length > 0 else 1
         total_material_area = request.sheet.width * consumed_length
     else:
@@ -182,7 +154,7 @@ def optimize_layout(request: OptimizationRequest):
         "global_metrics": {
             "material_type": request.material_type,
             "total_sheets_used": len(packed_sheets),
-            "total_pieces": len(unpacked_pieces_input),
+            "total_pieces": len(unpacked_pieces),
             "total_placed_pieces": len(all_placed_ids),
             "waste_percentage": round(waste_percentage, 2),
             "total_material_area_sqm": round(total_material_area_sqm, 2),
