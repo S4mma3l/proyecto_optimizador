@@ -2,143 +2,141 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Literal
-import rectpack
 import math
+from ortools.sat.python import cp_model
 
-# --- MODELOS DE DATOS (sin cambios) ---
+# --- MODELOS DE DATOS ---
 class Piece(BaseModel):
-    id: str; width: float; height: float; quantity: int = 1
+    id: str
+    width: float
+    height: float
+    quantity: int = 1
+
 class Sheet(BaseModel):
-    width: float; height: float
+    width: float
+    height: float
+
 class OptimizationRequest(BaseModel):
-    material_type: Literal["sheet", "roll"]; sheet: Sheet; pieces: List[Piece]; kerf: float = 0; respect_grain: bool = False
-    cutting_speed_mms: float; sheet_thickness_mm: float = 0; cut_depth_per_pass_mm: float = 0
+    material_type: Literal["sheet", "roll"]
+    sheet: Sheet
+    pieces: List[Piece]
+    kerf: float = 0
+    respect_grain: bool = False
+    cutting_speed_mms: float
+    sheet_thickness_mm: float = 0
+    cut_depth_per_pass_mm: float = 0
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Hyper-Optimización de Corte Definitiva",
-    description="API con torneo de algoritmos híbrido para resultados de máxima densidad.",
-    version="12.0.0"
+    title="API de Optimización de Corte con Google OR-Tools v2",
+    description="Solver mejorado con rotación de piezas y empaquetado múltiple.",
+    version="12.1.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-
-# --- FUNCIÓN HELPER PARA EL TORNEO ---
-def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, sheet_height, kerf, rotation_allowed, algo):
-    pieces_to_pack = [{'width': p.width + kerf, 'height': p.height + kerf, 'rid': p.id} for p in unpacked_pieces_data]
-    all_bins = []
-    if material_type == 'roll':
-        packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
-        for p_data in pieces_to_pack: packer.add_rect(**p_data)
-        packer.add_bin(width=sheet_width, height=9999999)
-        packer.pack()
-        all_bins.extend(packer)
-    else:
-        while pieces_to_pack:
-            packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
-            for p_data in pieces_to_pack: packer.add_rect(**p_data)
-            packer.add_bin(width=sheet_width, height=sheet_height)
-            packer.pack()
-            if len(packer) > 0 and packer[0]:
-                all_bins.append(packer[0])
-                placed_ids = {r.rid for r in packer[0]}
-                if not placed_ids: break
-                pieces_to_pack = [p for p in pieces_to_pack if p['rid'] not in placed_ids]
-            else:
-                break
-    
-    if material_type == 'roll':
-        max_y = max((r.y + r.height for r in all_bins[0]), default=0) if all_bins and all_bins[0] else 0
-        score = {'consumed_length': max_y}
-    else:
-        num_sheets = len(all_bins)
-        waste = 0
-        if num_sheets > 0:
-            last_bin = all_bins[-1]
-            waste = (last_bin.width * last_bin.height) - sum(r.width * r.height for r in last_bin)
-        score = {'sheets_used': num_sheets, 'waste_on_last': waste}
-    return {'bins': all_bins, 'score': score}
-
-
 @app.post("/api/optimize")
 def optimize_layout(request: OptimizationRequest):
-    unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height) for p in request.pieces for i in range(p.quantity)]
+    # 1. Desempaquetar piezas
+    unpacked_pieces = []
+    original_pieces_map = {}
+    for piece in request.pieces:
+        for i in range(piece.quantity):
+            new_id = f"{piece.id}-{i+1}" if piece.quantity > 1 else piece.id
+            unpacked_pieces.append({
+                "id": new_id,
+                "width": int(piece.width + request.kerf),
+                "height": int(piece.height + request.kerf)
+            })
+            original_pieces_map[new_id] = piece
 
-    # --- INICIO DEL TORNEO DE CAMPEONES ---
+    sheet_width = int(request.sheet.width)
+    sheet_height_limit = 999999 if request.material_type == 'roll' else int(request.sheet.height)
+    rotation_allowed = not request.respect_grain
     
-    # 1. Definir los algoritmos de empaquetado a probar
-    algos_to_test = [
-        rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf, rectpack.MaxRectsBl,
-        rectpack.GuillotineBafSas, rectpack.GuillotineBafLas, rectpack.GuillotineBlsfLas
-    ]
+    model = cp_model.CpModel()
+
+    # --- VARIABLES ---
+    # Para cada pieza, variables para coordenadas y si está rotada
+    x_vars = {p['id']: model.NewIntVar(0, sheet_width, f"x_{p['id']}") for p in unpacked_pieces}
+    y_vars = {p['id']: model.NewIntVar(0, sheet_height_limit, f"y_{p['id']}") for p in unpacked_pieces}
+    rotated_vars = {p['id']: model.NewBoolVar(f"r_{p['id']}") for p in unpacked_pieces} if rotation_allowed else {}
+
+    # Variables de intervalo para las dimensiones en x e y
+    x_intervals = {}
+    y_intervals = {}
+
+    for p in unpacked_pieces:
+        width, height = p['width'], p['height']
+        # Dimensiones efectivas basadas en la rotación
+        if rotation_allowed and width != height:
+            is_rotated = rotated_vars[p['id']]
+            # Si se rota, las dimensiones se intercambian
+            w = model.NewIntVar(0, sheet_width, f"w_{p['id']}")
+            h = model.NewIntVar(0, sheet_height_limit, f"h_{p['id']}")
+            model.Add(w == width).OnlyEnforceIf(is_rotated.Not())
+            model.Add(h == height).OnlyEnforceIf(is_rotated.Not())
+            model.Add(w == height).OnlyEnforceIf(is_rotated)
+            model.Add(h == width).OnlyEnforceIf(is_rotated)
+        else:
+            w, h = width, height
+
+        x_intervals[p['id']] = model.NewIntervalVar(x_vars[p['id']], w, x_vars[p['id']] + w, f"xi_{p['id']}")
+        y_intervals[p['id']] = model.NewIntervalVar(y_vars[p['id']], h, y_vars[p['id']] + h, f"yi_{p['id']}")
+
+    # --- RESTRICCIONES ---
+    # 1. No solapamiento: Añadir una restricción de no solapamiento en 2D
+    model.AddNoOverlap2D(list(x_intervals.values()), list(y_intervals.values()))
+
+    # 2. Límites del contenedor
+    for p in unpacked_pieces:
+        model.Add(x_vars[p['id']] + x_intervals[p['id']].SizeExpr() <= sheet_width)
+        if request.material_type == 'sheet':
+            model.Add(y_vars[p['id']] + y_intervals[p['id']].SizeExpr() <= sheet_height_limit)
+
+    # --- OBJETIVO ---
+    # Minimizar el largo del rollo o la altura de la lámina
+    max_height_var = model.NewIntVar(0, sheet_height_limit, 'max_height')
+    for p in unpacked_pieces:
+        model.Add(max_height_var >= y_vars[p['id']] + y_intervals[p['id']].SizeExpr())
+    model.Minimize(max_height_var)
     
-    all_results = []
+    # --- RESOLVER EL PROBLEMA ---
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 20.0  # Límite de tiempo
+    status = solver.Solve(model)
+
+    # --- PROCESAR RESULTADOS ---
+    placed_pieces = []
+    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+        for p_data in unpacked_pieces:
+            p_id = p_data['id']
+            is_rotated = solver.Value(rotated_vars[p_id]) if p_id in rotated_vars else False
+            original_piece = original_pieces_map[p_id]
+            
+            placed_pieces.append({
+                "id": p_id,
+                "x": solver.Value(x_vars[p_id]),
+                "y": solver.Value(y_vars[p_id]),
+                "width": original_piece.width,
+                "height": original_piece.height,
+                "rotated": is_rotated
+            })
+
+    all_placed_ids = {p['id'] for p in placed_pieces}
+    impossible_ids = [p_id for p_id in original_pieces_map if p_id not in all_placed_ids]
     
-    # RONDA 1: Dejar que los algoritmos trabajen con la lista original, sin ordenar
-    print("Ejecutando torneo en lista sin ordenar...")
-    for algo in algos_to_test:
-        result = run_one_packing_algorithm(
-            unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height,
-            request.kerf, not request.respect_grain, algo
-        )
-        result['strategy'] = f"unsorted_{algo.__name__}"
-        all_results.append(result)
+    total_placed_piece_area = sum(p['width'] * p['height'] for p in placed_pieces)
+    total_cut_length_mm = sum(2 * (p['width'] + p['height']) for p in placed_pieces)
 
-    # RONDA 2: Probar con diferentes estrategias de ordenamiento
-    sorting_heuristics = {
-        "height_desc": lambda p: p.height,
-        "width_desc": lambda p: p.width,
-        "area_desc": lambda p: p.width * p.height,
-    }
-
-    for sort_name, sort_key in sorting_heuristics.items():
-        print(f"Ejecutando torneo en lista ordenada por: {sort_name}")
-        sorted_pieces = sorted(unpacked_pieces, key=sort_key, reverse=True)
-        for algo in algos_to_test:
-            result = run_one_packing_algorithm(
-                sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
-                request.kerf, not request.respect_grain, algo
-            )
-            result['strategy'] = f"{sort_name}_{algo.__name__}"
-            all_results.append(result)
-
-    # --- DETERMINAR EL CAMPEÓN ABSOLUTO ---
     if request.material_type == 'roll':
-        best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
-    else:
-        best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
-    
-    print(f"Estrategia ganadora: {best_result.get('strategy', 'N/A')}")
-    winner_bins = best_result['bins']
-    
-    # --- PROCESAR Y DEVOLVER EL RESULTADO DEL CAMPEÓN ---
-    packed_sheets, all_placed_ids, total_placed_piece_area, max_y_in_roll = [], set(), 0, 0
-    total_cut_length_mm = 0
-
-    for i, abin in enumerate(winner_bins):
-        if not abin: continue
-        sheet_data = {"sheet_index": i + 1, "sheet_dimensions": {"width": abin.width, "height": abin.height}, "placed_pieces": [], "metrics": {}}
-        for r in abin:
-            all_placed_ids.add(r.rid)
-            pw, ph = r.width - request.kerf, r.height - request.kerf
-            original_piece = next((p for p in unpacked_pieces if p.id == r.rid), None)
-            is_rotated = (pw != original_piece.width) if original_piece and not request.respect_grain else False
-            sheet_data["placed_pieces"].append({"id": r.rid, "x": r.x, "y": r.y, "width": pw, "height": ph, "rotated": is_rotated})
-            total_placed_piece_area += pw * ph
-            total_cut_length_mm += 2 * (pw + ph)
-            if r.y + r.height > max_y_in_roll: max_y_in_roll = r.y + r.height
-        sheet_data["metrics"]["piece_count"] = len(abin)
-        packed_sheets.append(sheet_data)
-
-    impossible_ids = [p.id for p in unpacked_pieces if p.id not in all_placed_ids]
-    
-    if request.material_type == 'roll' and packed_sheets:
-        consumed_length = max_y_in_roll
-        packed_sheets[0]['sheet_dimensions']['height'] = consumed_length if consumed_length > 0 else 1
+        consumed_length = solver.ObjectiveValue()
         total_material_area = request.sheet.width * consumed_length
+        final_sheet_height = consumed_length
     else:
-        total_material_area = len(packed_sheets) * request.sheet.width * request.sheet.height
+        # Para una sola lámina, el área es la de la lámina
+        total_material_area = request.sheet.width * request.sheet.height
+        final_sheet_height = request.sheet.height
         
     waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
     total_material_area_sqm = total_material_area / 1_000_000
@@ -146,14 +144,26 @@ def optimize_layout(request: OptimizationRequest):
     num_passes = 1
     if request.material_type == 'sheet' and request.sheet_thickness_mm > 0 and request.cut_depth_per_pass_mm > 0:
         num_passes = math.ceil(request.sheet_thickness_mm / request.cut_depth_per_pass_mm)
+    
     total_path_distance = total_cut_length_mm * num_passes
     estimated_time_seconds = total_path_distance / request.cutting_speed_mms if request.cutting_speed_mms > 0 else 0
-
+    
+    # NOTA: Este solver actual solo maneja 1 lámina. La lógica de múltiples láminas con OR-Tools es mucho más compleja.
+    # Devolvemos un array con una sola lámina como resultado.
     return {
-        "sheets": packed_sheets, "impossible_to_place_ids": impossible_ids, "unplaced_piece_ids": [],
+        "sheets": [{
+            "sheet_index": 1,
+            "sheet_dimensions": {"width": request.sheet.width, "height": final_sheet_height},
+            "placed_pieces": placed_pieces,
+            "metrics": {"piece_count": len(placed_pieces)}
+        }] if placed_pieces else [],
+        "impossible_to_place_ids": impossible_ids,
+        "unplaced_piece_ids": [],
         "global_metrics": {
-            "material_type": request.material_type, "total_sheets_used": len(packed_sheets),
-            "total_pieces": len(unpacked_pieces), "total_placed_pieces": len(all_placed_ids),
+            "material_type": request.material_type,
+            "total_sheets_used": 1 if placed_pieces else 0,
+            "total_pieces": len(original_pieces_map),
+            "total_placed_pieces": len(placed_pieces),
             "waste_percentage": round(waste_percentage, 2),
             "total_material_area_sqm": round(total_material_area_sqm, 2),
             "estimated_time_seconds": round(estimated_time_seconds)

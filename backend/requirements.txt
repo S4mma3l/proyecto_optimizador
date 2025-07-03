@@ -1,4 +1,8 @@
-fastapi
-uvicorn
-rectpack
-pydantic
+fastapi==0.111.0
+uvicorn==0.29.0
+rectpack==0.2.2
+pydantic==2.7.4
+# Esta versión de ortools es estable en Python 3.11
+ortools==9.9.3963
+# Y es compatible con esta versión de protobuf
+protobuf==4.25.3
