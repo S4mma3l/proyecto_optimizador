@@ -16,9 +16,9 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS ---
 app = FastAPI(
-    title="API de Hyper-Optimización de Corte",
-    description="API con torneo exhaustivo de algoritmos y heurísticas de ordenamiento para resultados de máxima densidad.",
-    version="11.0.0"
+    title="API de Hyper-Optimización de Corte Definitiva",
+    description="API con torneo de algoritmos híbrido para resultados de máxima densidad.",
+    version="12.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -65,31 +65,36 @@ def run_one_packing_algorithm(unpacked_pieces_data, material_type, sheet_width, 
 def optimize_layout(request: OptimizationRequest):
     unpacked_pieces = [Piece(id=f"{p.id}-{i+1}" if p.quantity > 1 else p.id, width=p.width, height=p.height) for p in request.pieces for i in range(p.quantity)]
 
-    # --- INICIO DEL TORNEO DE TORNEOS ---
+    # --- INICIO DEL TORNEO DE CAMPEONES ---
     
-    # 1. Definir las estrategias de ordenamiento (heurísticas)
+    # 1. Definir los algoritmos de empaquetado a probar
+    algos_to_test = [
+        rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf, rectpack.MaxRectsBl,
+        rectpack.GuillotineBafSas, rectpack.GuillotineBafLas, rectpack.GuillotineBlsfLas
+    ]
+    
+    all_results = []
+    
+    # RONDA 1: Dejar que los algoritmos trabajen con la lista original, sin ordenar
+    print("Ejecutando torneo en lista sin ordenar...")
+    for algo in algos_to_test:
+        result = run_one_packing_algorithm(
+            unpacked_pieces, request.material_type, request.sheet.width, request.sheet.height,
+            request.kerf, not request.respect_grain, algo
+        )
+        result['strategy'] = f"unsorted_{algo.__name__}"
+        all_results.append(result)
+
+    # RONDA 2: Probar con diferentes estrategias de ordenamiento
     sorting_heuristics = {
         "height_desc": lambda p: p.height,
         "width_desc": lambda p: p.width,
         "area_desc": lambda p: p.width * p.height,
-        "perimeter_desc": lambda p: 2 * (p.width + p.height),
     }
 
-    # 2. Definir los algoritmos de empaquetado a probar
-    algos_to_test = [
-        rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf, rectpack.MaxRectsBl,
-        rectpack.GuillotineBssfSas, rectpack.GuillotineBssfLas, rectpack.GuillotineBssfSlas,
-        rectpack.GuillotineBafSas, rectpack.GuillotineBafLas,
-        rectpack.GuillotineBlsfSas, rectpack.GuillotineBlsfLas,
-    ]
-
-    all_results = []
-    
-    # 3. Iterar sobre cada estrategia de ordenamiento
     for sort_name, sort_key in sorting_heuristics.items():
+        print(f"Ejecutando torneo en lista ordenada por: {sort_name}")
         sorted_pieces = sorted(unpacked_pieces, key=sort_key, reverse=True)
-        
-        # 4. Por cada lista ordenada, ejecutar el torneo de algoritmos
         for algo in algos_to_test:
             result = run_one_packing_algorithm(
                 sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
@@ -98,7 +103,7 @@ def optimize_layout(request: OptimizationRequest):
             result['strategy'] = f"{sort_name}_{algo.__name__}"
             all_results.append(result)
 
-    # --- 5. DETERMINAR EL CAMPEÓN ABSOLUTO ---
+    # --- DETERMINAR EL CAMPEÓN ABSOLUTO ---
     if request.material_type == 'roll':
         best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
