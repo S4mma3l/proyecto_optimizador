@@ -3,6 +3,11 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { FaCheckCircle, FaExclamationTriangle, FaTh, FaBan, FaTape, FaTrashAlt, FaFilePdf, FaBoxes, FaClock } from 'react-icons/fa';
 
+// --- ¡FUNCIÓN RESTAURADA AQUÍ! ---
+const generatePastelColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 85%)`;
+
+const getTextColorForBackground = () => 'black';
+
 // Función helper para formatear tiempo (cuerpo completo)
 const formatTime = (totalSeconds) => {
   if (totalSeconds < 0 || !totalSeconds) return "00:00:00";
@@ -30,7 +35,7 @@ const SingleSheetLayout = ({ sheetData, pieceColors }) => {
             ctx.fillStyle = pieceColors.current.get(baseId) || 'gray'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
             ctx.fillRect(p.x, p.y, p.width, p.height); ctx.strokeRect(p.x, p.y, p.width, p.height);
             if (p.width > 30 && p.height > 20) {
-              ctx.fillStyle = 'black';
+              ctx.fillStyle = getTextColorForBackground();
               const fontSize = Math.max(10, Math.min(p.width, p.height) / 5);
               ctx.font = `bold ${fontSize}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
               const label = baseId; const dims = p.rotated ? `${p.height}x${p.width}` : `${p.width}x${p.height}`;
