@@ -28,9 +28,9 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS (Sin cambios) ---
 app = FastAPI(
-    title="API de Optimización de Corte (Llenado Exhaustivo)",
-    description="Motor con algoritmo de llenado exhaustivo por lámina para máxima perfección.",
-    version="18.0.0"
+    title="API de Optimización de Corte (Lógica Dual Perfeccionada)",
+    description="Motor con algoritmos especializados y perfeccionados para láminas y rollos.",
+    version="19.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -76,86 +76,113 @@ def optimize_layout(request: OptimizationRequest):
         rectpack.GuillotineBssfSas, rectpack.GuillotineBafSas, rectpack.GuillotineBlsfSas
     ]
 
-    # --- LÓGICA DE OPTIMIZACIÓN PERFECCIONADA: LLENADO EXHAUSTIVO POR LÁMINA ---
-    
     final_bins = []
-    pieces_to_pack = list(unpacked_pieces)
-    sheet_index = 0
 
-    while pieces_to_pack:
-        sheet_index += 1
-        print(f"\n--- Optimizando Lámina #{sheet_index} con {len(pieces_to_pack)} piezas restantes ---")
-        
-        # Para cada nueva lámina, realizamos un "mini-campeonato" para encontrar el mejor llenado posible.
-        best_bin_for_this_sheet = None
-        best_fill_percentage = -1
+    # --- LÓGICA DE OPTIMIZACIÓN DUAL ---
+    # Se aplica una estrategia diferente si el material es 'sheet' o 'roll'.
+
+    if request.material_type == 'sheet':
+        # --- ESTRATEGIA 1: LLENADO EXHAUSTIVO PARA LÁMINAS (PERFECCIONADO) ---
+        pieces_to_pack = list(unpacked_pieces)
+        sheet_index = 0
+        while pieces_to_pack:
+            sheet_index += 1
+            print(f"\n--- Optimizando Lámina #{sheet_index} con {len(pieces_to_pack)} piezas restantes ---")
+            
+            best_bin_for_this_sheet = None
+            # Criterio de selección mejorado: (porcentaje de llenado, número de piezas)
+            best_selection_criteria = (-1, -1) 
+            best_strategy_info = {}
+
+            for sort_name, sort_func in sort_strategies.items():
+                sorted_pieces = sort_func(pieces_to_pack)
+                for algo in algos_to_test:
+                    try:
+                        current_bin = run_single_bin_packing(
+                            sorted_pieces, request.sheet.width, request.sheet.height,
+                            request.kerf, not request.respect_grain, algo
+                        )
+                        if current_bin and len(current_bin) > 0:
+                            placed_area = sum((r.width - request.kerf) * (r.height - request.kerf) for r in current_bin)
+                            sheet_area = current_bin.width * current_bin.height
+                            fill_percentage = (placed_area / sheet_area) * 100 if sheet_area > 0 else 0
+                            num_placed_pieces = len(current_bin)
+                            
+                            # PERFECCIONAMIENTO: Se usa un criterio de desempate.
+                            # Se prioriza el mayor porcentaje de llenado, y si es igual,
+                            # se prefiere la solución que haya empaquetado más piezas.
+                            if (fill_percentage, num_placed_pieces) > best_selection_criteria:
+                                best_selection_criteria = (fill_percentage, num_placed_pieces)
+                                best_bin_for_this_sheet = current_bin
+                                best_strategy_info = {'sort': sort_name, 'algo': algo.__name__}
+                    except Exception as e:
+                        print(f"ADVERTENCIA: Falló la combinación: Orden='{sort_name}', Algo='{algo.__name__}'. Error: {e}")
+                        continue
+            
+            if best_bin_for_this_sheet:
+                fill_perc, num_pieces = best_selection_criteria
+                print(f"Mejor llenado para Lámina #{sheet_index} encontrado ({fill_perc:.2f}% / {num_pieces} piezas) con: {best_strategy_info}")
+                final_bins.append(best_bin_for_this_sheet)
+                placed_ids = {r.rid for r in best_bin_for_this_sheet}
+                pieces_to_pack = [p for p in pieces_to_pack if p['id'] not in placed_ids]
+            else:
+                print("No se pudieron colocar más piezas. Finalizando optimización.")
+                break
+    
+    elif request.material_type == 'roll':
+        # --- ESTRATEGIA 2: CONSUMO MÍNIMO PARA ROLLOS (NUEVA LÓGICA) ---
+        print(f"\n--- Optimizando Rollo con {len(unpacked_pieces)} piezas ---")
+        best_bin_for_roll = None
+        min_consumed_length = float('inf')
         best_strategy_info = {}
 
-        # El Súper-Torneo ahora se ejecuta DENTRO del bucle, para cada lámina.
+        # Se realiza un Súper-Torneo para encontrar la combinación que use la menor longitud de rollo.
         for sort_name, sort_func in sort_strategies.items():
-            sorted_pieces = sort_func(pieces_to_pack)
+            sorted_pieces = sort_func(unpacked_pieces)
             for algo in algos_to_test:
                 try:
-                    # Intentamos empaquetar las piezas restantes en una nueva lámina
+                    # Se usa una altura "infinita" para simular el rollo.
                     current_bin = run_single_bin_packing(
-                        sorted_pieces, request.sheet.width, request.sheet.height,
+                        sorted_pieces, request.sheet.width, 9999999,
                         request.kerf, not request.respect_grain, algo
                     )
-
                     if current_bin and len(current_bin) > 0:
-                        # Calculamos el área total de las piezas colocadas en esta lámina
-                        placed_area = sum((r.width - request.kerf) * (r.height - request.kerf) for r in current_bin)
-                        sheet_area = current_bin.width * current_bin.height
-                        fill_percentage = (placed_area / sheet_area) * 100 if sheet_area > 0 else 0
-
-                        # Si este resultado llena la lámina más que el mejor anterior, lo guardamos.
-                        if fill_percentage > best_fill_percentage:
-                            best_fill_percentage = fill_percentage
-                            best_bin_for_this_sheet = current_bin
+                        consumed_length = max((r.y + r.height for r in current_bin), default=0)
+                        if consumed_length < min_consumed_length:
+                            min_consumed_length = consumed_length
+                            best_bin_for_roll = current_bin
                             best_strategy_info = {'sort': sort_name, 'algo': algo.__name__}
-
                 except Exception as e:
                     print(f"ADVERTENCIA: Falló la combinación: Orden='{sort_name}', Algo='{algo.__name__}'. Error: {e}")
                     continue
         
-        # Si encontramos una forma de colocar al menos una pieza, la procesamos.
-        if best_bin_for_this_sheet:
-            print(f"Mejor llenado para Lámina #{sheet_index} encontrado ({best_fill_percentage:.2f}% de ocupación) con: {best_strategy_info}")
-            final_bins.append(best_bin_for_this_sheet)
-            
-            # Obtenemos los IDs de las piezas que se colocaron en la lámina óptima.
-            placed_ids = {r.rid for r in best_bin_for_this_sheet}
-            
-            # Actualizamos la lista de piezas pendientes, eliminando las que ya se colocaron.
-            pieces_to_pack = [p for p in pieces_to_pack if p['id'] not in placed_ids]
-        else:
-            # Si no se pudo colocar ninguna pieza más, detenemos el bucle.
-            print("No se pudieron colocar más piezas. Finalizando optimización.")
-            break
+        if best_bin_for_roll:
+            print(f"Mejor distribución para Rollo encontrada (largo: {min_consumed_length:.2f}mm) con: {best_strategy_info}")
+            final_bins.append(best_bin_for_roll)
 
-    # --- PROCESAMIENTO DE RESULTADOS (Lógica sin cambios, ahora usa `final_bins`) ---
+    # --- PROCESAMIENTO DE RESULTADOS (Unificado para ambas estrategias) ---
     packed_sheets = []
     all_placed_ids = set()
     total_placed_piece_area = 0
     total_cut_length_mm = 0
+    max_y_in_roll = 0
     
     for i, abin in enumerate(final_bins):
         if not abin: continue
         sheet_data = {"sheet_index": i + 1, "sheet_dimensions": {"width": abin.width, "height": abin.height}, "placed_pieces": [], "metrics": {}}
         for r in abin:
             all_placed_ids.add(r.rid)
-            
             pw, ph = r.width - request.kerf, r.height - request.kerf
             original_piece = next((p for p in unpacked_pieces if p['id'] == r.rid), None)
-            
             is_rotated = False
             if original_piece and not request.respect_grain:
                 if (abs(pw - original_piece['width']) > 0.01 or abs(ph - original_piece['height']) > 0.01):
                     is_rotated = True
-
             sheet_data["placed_pieces"].append({"id": r.rid, "x": r.x, "y": r.y, "width": pw, "height": ph, "rotated": is_rotated})
             total_placed_piece_area += pw * ph
             total_cut_length_mm += 2 * (pw + ph)
+            if request.material_type == 'roll':
+                if r.y + r.height > max_y_in_roll: max_y_in_roll = r.y + r.height
         
         sheet_data["metrics"]["piece_count"] = len(abin)
         packed_sheets.append(sheet_data)
@@ -163,7 +190,13 @@ def optimize_layout(request: OptimizationRequest):
     impossible_ids = [p['id'] for p in unpacked_pieces if p['id'] not in all_placed_ids]
     
     # Calcular métricas globales
-    total_material_area = len(packed_sheets) * request.sheet.width * request.sheet.height
+    if request.material_type == 'roll' and packed_sheets:
+        consumed_length = max_y_in_roll
+        # Se ajusta la altura del resultado para que coincida con el largo consumido.
+        packed_sheets[0]['sheet_dimensions']['height'] = consumed_length
+        total_material_area = request.sheet.width * consumed_length
+    else:
+        total_material_area = len(packed_sheets) * request.sheet.width * request.sheet.height
         
     waste_percentage = ((total_material_area - total_placed_piece_area) / total_material_area) * 100 if total_material_area > 0 else 0
     total_material_area_sqm = total_material_area / 1_000_000
