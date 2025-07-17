@@ -30,7 +30,7 @@ class OptimizationRequest(BaseModel):
 app = FastAPI(
     title="API de Optimización de Corte (Algoritmo Perfeccionado y Robusto)",
     description="Motor con Súper-Torneo de algoritmos y ordenamiento para máxima eficiencia.",
-    version="17.1.0"
+    version="17.2.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -109,11 +109,12 @@ def optimize_layout(request: OptimizationRequest):
         "none": lambda pieces: pieces
     }
 
-    # --- MEJORA 2: TORNEO DE ALGORITMOS AMPLIADO ---
+    # --- MEJORA 2: TORNEO DE ALGORITMOS AMPLIADO (CON CORRECCIÓN) ---
+    # Se corrige el nombre del algoritmo SkylineMals a SkylineMlas
     algos_to_test = [
         rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf,
         rectpack.GuillotineBssfSas, rectpack.GuillotineBafSas, rectpack.GuillotineBlsfSas,
-        rectpack.SkylineMwf, rectpack.SkylineBl, rectpack.SkylineMals
+        rectpack.SkylineMwf, rectpack.SkylineBl, rectpack.SkylineMlas # CORREGIDO: Mals -> Mlas
     ]
 
     all_results = []
