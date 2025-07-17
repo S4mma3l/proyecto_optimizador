@@ -28,9 +28,9 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS (Sin cambios) ---
 app = FastAPI(
-    title="API de Optimización de Corte (Algoritmo Perfeccionado)",
+    title="API de Optimización de Corte (Algoritmo Perfeccionado y Robusto)",
     description="Motor con Súper-Torneo de algoritmos y ordenamiento para máxima eficiencia.",
-    version="17.0.0"
+    version="17.1.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -99,9 +99,6 @@ def optimize_layout(request: OptimizationRequest):
     ]
 
     # --- MEJORA 1: ESTRATEGIAS DE ORDENAMIENTO ---
-    # Se definen múltiples formas de ordenar las piezas antes de pasarlas al algoritmo.
-    # El orden de las piezas tiene un impacto GIGANTESCO en el resultado final.
-    # Cada lambda toma la lista de piezas y devuelve una nueva lista ordenada.
     sort_strategies = {
         "area": lambda pieces: sorted(pieces, key=lambda p: p['width'] * p['height'], reverse=True),
         "short_side": lambda pieces: sorted(pieces, key=lambda p: min(p['width'], p['height']), reverse=True),
@@ -109,12 +106,10 @@ def optimize_layout(request: OptimizationRequest):
         "height": lambda pieces: sorted(pieces, key=lambda p: p['height'], reverse=True),
         "width": lambda pieces: sorted(pieces, key=lambda p: p['width'], reverse=True),
         "perimeter": lambda pieces: sorted(pieces, key=lambda p: 2*p['width'] + 2*p['height'], reverse=True),
-        "none": lambda pieces: pieces # También incluimos la opción de no ordenar
+        "none": lambda pieces: pieces
     }
 
     # --- MEJORA 2: TORNEO DE ALGORITMOS AMPLIADO ---
-    # Usamos un conjunto más grande y diverso de los mejores algoritmos de rectpack.
-    # Incluimos variantes de Guillotine, MaxRects y Skyline para una cobertura completa.
     algos_to_test = [
         rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf,
         rectpack.GuillotineBssfSas, rectpack.GuillotineBafSas, rectpack.GuillotineBlsfSas,
@@ -124,39 +119,45 @@ def optimize_layout(request: OptimizationRequest):
     all_results = []
     
     # --- MEJORA 3: EL "SÚPER-TORNEO" ---
-    # Este doble bucle es el corazón de la nueva optimización.
-    # Probamos CADA estrategia de ordenamiento con CADA algoritmo de empaquetado.
     print(f"Iniciando Súper-Torneo: {len(sort_strategies)} estrategias x {len(algos_to_test)} algoritmos...")
     for sort_name, sort_func in sort_strategies.items():
         sorted_pieces = sort_func(unpacked_pieces)
         for algo in algos_to_test:
-            result = run_one_packing_algorithm(
-                sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
-                request.kerf, not request.respect_grain, algo
-            )
-            # Guardamos información extra para poder depurar y saber qué combinación ganó
-            result['sort_strategy'] = sort_name
-            result['pack_algo'] = algo.__name__
-            all_results.append(result)
+            # --- CORRECCIÓN DE ERROR: Bloque try-except para robustez ---
+            # Se captura cualquier excepción que pueda ocurrir en una combinación específica
+            # de ordenamiento y algoritmo, evitando que la API entera se caiga.
+            try:
+                result = run_one_packing_algorithm(
+                    sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
+                    request.kerf, not request.respect_grain, algo
+                )
+                # Guardamos información extra para poder depurar y saber qué combinación ganó
+                result['sort_strategy'] = sort_name
+                result['pack_algo'] = algo.__name__
+                all_results.append(result)
+            except Exception as e:
+                # Si una combinación falla, se imprime un error en la consola y se continúa
+                # con la siguiente, en lugar de detener todo el proceso.
+                print(f"ADVERTENCIA: Falló la combinación: Orden='{sort_name}', Algo='{algo.__name__}'. Error: {e}")
+                continue
     print("Súper-Torneo finalizado. Seleccionando el mejor resultado.")
 
-    # Determinar el ganador (la lógica de selección es la misma, pero ahora sobre un pool mucho más grande de resultados)
+    # Determinar el ganador
+    # --- CORRECCIÓN DE ERROR: Se verifica si all_results está vacío antes de usar min() ---
+    # Si ninguna de las combinaciones del torneo tuvo éxito, se devuelve un error claro.
     if not all_results:
-        # Manejar el caso donde no se generó ningún resultado
-        return {"error": "No se pudo generar ninguna distribución de piezas."}
+        return {"error": "No se pudo generar ninguna distribución válida. Verifique las dimensiones de las piezas y la lámina."}
 
     if request.material_type == 'roll':
-        # Para rollos, gana el que consume menos longitud.
         best_result = min(all_results, key=lambda r: r['score']['consumed_length'])
     else:
-        # Para láminas, gana el que usa menos láminas. En caso de empate, el que tiene menos desperdicio en la última lámina.
         best_result = min(all_results, key=lambda r: (r['score']['sheets_used'], r['score']['waste_on_last']))
     
     print(f"Mejor resultado encontrado con: Ordenamiento='{best_result['sort_strategy']}', Algoritmo='{best_result['pack_algo']}'")
     
     winner_bins = best_result['bins']
     
-    # --- PROCESAMIENTO DE RESULTADOS (Sin cambios funcionales, solo limpieza) ---
+    # --- PROCESAMIENTO DE RESULTADOS (Sin cambios funcionales) ---
     packed_sheets = []
     all_placed_ids = set()
     total_placed_piece_area = 0
@@ -169,14 +170,11 @@ def optimize_layout(request: OptimizationRequest):
         for r in abin:
             all_placed_ids.add(r.rid)
             
-            # Restar el kerf para obtener las dimensiones y posiciones REALES de la pieza
             pw, ph = r.width - request.kerf, r.height - request.kerf
             original_piece = next((p for p in unpacked_pieces if p['id'] == r.rid), None)
             
             is_rotated = False
             if original_piece and not request.respect_grain:
-                # Una pieza se considera rotada si sus dimensiones empaquetadas (sin kerf)
-                # no coinciden con sus dimensiones originales.
                 if (abs(pw - original_piece['width']) > 0.01 or abs(ph - original_piece['height']) > 0.01):
                     is_rotated = True
 
@@ -193,7 +191,6 @@ def optimize_layout(request: OptimizationRequest):
     # Calcular métricas globales
     if request.material_type == 'roll' and packed_sheets:
         consumed_length = max_y_in_roll
-        # Aseguramos que la altura del rollo refleje el contenido real
         packed_sheets[0]['sheet_dimensions']['height'] = consumed_length if consumed_length > 0 else 1
         total_material_area = request.sheet.width * consumed_length
     else:
@@ -209,7 +206,7 @@ def optimize_layout(request: OptimizationRequest):
     return {
         "sheets": packed_sheets,
         "impossible_to_place_ids": impossible_ids,
-        "unplaced_piece_ids": [], # Este campo parece no usarse, lo mantengo por compatibilidad
+        "unplaced_piece_ids": [],
         "global_metrics": {
             "material_type": request.material_type,
             "total_sheets_used": len(packed_sheets),
@@ -218,7 +215,7 @@ def optimize_layout(request: OptimizationRequest):
             "waste_percentage": round(waste_percentage, 2),
             "total_material_area_sqm": round(total_material_area_sqm, 2),
             "estimated_time_seconds": round(estimated_time_seconds),
-            "winning_strategy": { # Añadimos información sobre la estrategia ganadora
+            "winning_strategy": {
                 "sort_strategy": best_result['sort_strategy'],
                 "pack_algo": best_result['pack_algo']
             }
