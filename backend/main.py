@@ -28,9 +28,9 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS (Sin cambios) ---
 app = FastAPI(
-    title="API de Optimización de Corte (Algoritmo Perfeccionado y Robusto)",
+    title="API de Optimización de Corte (Algoritmo Corregido y Estable)",
     description="Motor con Súper-Torneo de algoritmos y ordenamiento para máxima eficiencia.",
-    version="17.2.0"
+    version="17.3.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -109,12 +109,12 @@ def optimize_layout(request: OptimizationRequest):
         "none": lambda pieces: pieces
     }
 
-    # --- MEJORA 2: TORNEO DE ALGORITMOS AMPLIADO (CON CORRECCIÓN) ---
-    # Se corrige el nombre del algoritmo SkylineMals a SkylineMlas
+    # --- MEJORA 2: TORNEO DE ALGORITMOS (ESTABLE) ---
+    # Se eliminan los algoritmos Skyline que causaban el error "AttributeError"
+    # en el entorno de despliegue para garantizar la estabilidad.
     algos_to_test = [
         rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf,
-        rectpack.GuillotineBssfSas, rectpack.GuillotineBafSas, rectpack.GuillotineBlsfSas,
-        rectpack.SkylineMwf, rectpack.SkylineBl, rectpack.SkylineMlas # CORREGIDO: Mals -> Mlas
+        rectpack.GuillotineBssfSas, rectpack.GuillotineBafSas, rectpack.GuillotineBlsfSas
     ]
 
     all_results = []
@@ -124,9 +124,7 @@ def optimize_layout(request: OptimizationRequest):
     for sort_name, sort_func in sort_strategies.items():
         sorted_pieces = sort_func(unpacked_pieces)
         for algo in algos_to_test:
-            # --- CORRECCIÓN DE ERROR: Bloque try-except para robustez ---
-            # Se captura cualquier excepción que pueda ocurrir en una combinación específica
-            # de ordenamiento y algoritmo, evitando que la API entera se caiga.
+            # --- Bloque try-except para robustez ---
             try:
                 result = run_one_packing_algorithm(
                     sorted_pieces, request.material_type, request.sheet.width, request.sheet.height,
@@ -138,14 +136,11 @@ def optimize_layout(request: OptimizationRequest):
                 all_results.append(result)
             except Exception as e:
                 # Si una combinación falla, se imprime un error en la consola y se continúa
-                # con la siguiente, en lugar de detener todo el proceso.
                 print(f"ADVERTENCIA: Falló la combinación: Orden='{sort_name}', Algo='{algo.__name__}'. Error: {e}")
                 continue
     print("Súper-Torneo finalizado. Seleccionando el mejor resultado.")
 
     # Determinar el ganador
-    # --- CORRECCIÓN DE ERROR: Se verifica si all_results está vacío antes de usar min() ---
-    # Si ninguna de las combinaciones del torneo tuvo éxito, se devuelve un error claro.
     if not all_results:
         return {"error": "No se pudo generar ninguna distribución válida. Verifique las dimensiones de las piezas y la lámina."}
 
