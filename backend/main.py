@@ -28,16 +28,15 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS (Sin cambios) ---
 app = FastAPI(
-    title="API de Optimización de Corte (Refinamiento Global)",
-    description="Motor con algoritmo profesional de dos fases para una perfección y estabilidad impecables.",
-    version="25.0.0"
+    title="API de Optimización de Corte (Refinamiento Exhaustivo)",
+    description="Motor con algoritmo profesional de refinamiento exhaustivo para una perfección y estabilidad impecables.",
+    version="26.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 # --- FUNCIÓN HELPER PARA EMPAQUETAR EN MÚLTIPLES CONTENEDORES ---
-# Esta función intenta empaquetar un conjunto de piezas en un número específico de contenedores.
 def run_multi_bin_packing(pieces_to_pack, num_bins, bin_width, bin_height, kerf, rotation_allowed, algo):
     packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
     for p in pieces_to_pack:
@@ -45,19 +44,16 @@ def run_multi_bin_packing(pieces_to_pack, num_bins, bin_width, bin_height, kerf,
     for _ in range(num_bins):
         packer.add_bin(width=bin_width, height=bin_height)
     packer.pack()
-    # Devuelve el objeto packer completo, que contiene tanto los contenedores como las piezas no colocadas.
     return packer
 
 
 @app.post("/api/optimize")
 def optimize_layout(request: OptimizationRequest):
-    # Desempaquetamos las piezas, igual que antes
     unpacked_pieces = [
         {"id": f"{p.id}-{i+1}" if p.quantity > 1 else p.id, "width": p.width, "height": p.height}
         for p in request.pieces for i in range(p.quantity)
     ]
 
-    # Estrategias de ordenamiento y algoritmos
     sort_strategies = {
         "area": lambda p_list: sorted(p_list, key=lambda p: p['width'] * p['height'], reverse=True),
         "short_side": lambda p_list: sorted(p_list, key=lambda p: min(p['width'], p['height']), reverse=True),
@@ -74,7 +70,6 @@ def optimize_layout(request: OptimizationRequest):
 
     final_bins = []
 
-    # --- LÓGICA DE OPTIMIZACIÓN DUAL Y ROBUSTA ---
     if request.material_type == 'sheet':
         # --- FASE 1: OBTENER UNA SOLUCIÓN INICIAL DE ALTA CALIDAD ---
         print("\n--- FASE 1: Generando solución inicial de alta calidad ---")
@@ -108,51 +103,75 @@ def optimize_layout(request: OptimizationRequest):
             else:
                 break
         
-        print(f"--- FASE 1 Completa: Solución inicial encontrada con {len(initial_bins)} láminas. ---")
+        if not initial_bins:
+            print("Error en Fase 1: No se pudo colocar ninguna pieza.")
+            final_bins = []
+        else:
+            n_initial = len(initial_bins)
+            print(f"--- FASE 1 Completa: Solución inicial encontrada con {n_initial} láminas. ---")
+            best_solution_so_far = initial_bins
 
-        # --- FASE 2: REFINAMIENTO GLOBAL PARA LA PERFECCIÓN ---
-        if len(initial_bins) > 1:
-            num_target_sheets = len(initial_bins) - 1
-            print(f"\n--- FASE 2: Intentando refinamiento global para reducir a {num_target_sheets} láminas ---")
-            best_refined_solution = None
-            min_waste_refined = float('inf')
+            # --- FASE 2A: RE-EMPAQUETADO PARA MEJORAR DISTRIBUCIÓN ---
+            print(f"\n--- FASE 2A: Intentando re-empaquetado para mejorar la distribución en {n_initial} láminas ---")
+            initial_total_waste = sum((b.width * b.height) - sum((r.width - request.kerf) * (r.height - request.kerf) for r in b) for b in initial_bins)
+            print(f"  -> Desperdicio total inicial: {initial_total_waste:.2f}")
+            best_repacked_solution = None
+            min_repacked_waste = initial_total_waste
             for sort_name, sort_func in sort_strategies.items():
                 for algo in algos_to_test:
                     try:
-                        packer = run_multi_bin_packing(
-                            sort_func(unpacked_pieces), num_target_sheets, request.sheet.width, request.sheet.height,
-                            request.kerf, not request.respect_grain, algo
-                        )
+                        packer = run_multi_bin_packing(sort_func(unpacked_pieces), n_initial, request.sheet.width, request.sheet.height, request.kerf, not request.respect_grain, algo)
                         if not packer.unplaced_rects():
-                            last_bin_waste = (packer[-1].width * packer[-1].height) - sum((r.width - request.kerf) * (r.height - request.kerf) for r in packer[-1])
-                            if last_bin_waste < min_waste_refined:
-                                min_waste_refined = last_bin_waste
-                                best_refined_solution = packer
-                                print(f"  -> ¡ÉXITO DE REFINAMIENTO! Solución encontrada con {num_target_sheets} láminas por '{algo.__name__}/{sort_name}'")
+                            current_total_waste = sum((b.width * b.height) - sum((r.width - request.kerf) * (r.height - request.kerf) for r in b) for b in packer)
+                            if current_total_waste < min_repacked_waste:
+                                min_repacked_waste = current_total_waste
+                                best_repacked_solution = packer
+                                print(f"  -> ¡Mejora de distribución encontrada! Nuevo desperdicio total: {current_total_waste:.2f} por '{algo.__name__}/{sort_name}'")
                     except Exception as e:
-                        print(f"ADVERTENCIA en Fase 2: {e}")
+                        print(f"ADVERTENCIA en Fase 2A: {e}")
                         continue
-            if best_refined_solution:
-                print("--- FASE 2 Completa: ¡Refinamiento exitoso! Usando la solución mejorada. ---")
-                final_bins = best_refined_solution
+            if best_repacked_solution:
+                print("--- FASE 2A Completa: Se encontró una distribución superior. ---")
+                best_solution_so_far = best_repacked_solution
             else:
-                print("--- FASE 2 Completa: No se pudo mejorar. La solución inicial es la óptima. ---")
-                final_bins = initial_bins
-        else:
-            final_bins = initial_bins
+                print("--- FASE 2A Completa: La distribución inicial es la mejor para este número de láminas. ---")
+
+            # --- FASE 2B: REDUCCIÓN DE LÁMINAS ---
+            n_current_best = len(best_solution_so_far)
+            if n_current_best > 1:
+                num_target_sheets = n_current_best - 1
+                print(f"\n--- FASE 2B: Intentando refinamiento para reducir a {num_target_sheets} láminas ---")
+                best_reduced_solution = None
+                min_waste_reduced = float('inf')
+                for sort_name, sort_func in sort_strategies.items():
+                    for algo in algos_to_test:
+                        try:
+                            packer = run_multi_bin_packing(sort_func(unpacked_pieces), num_target_sheets, request.sheet.width, request.sheet.height, request.kerf, not request.respect_grain, algo)
+                            if not packer.unplaced_rects():
+                                last_bin_waste = (packer[-1].width * packer[-1].height) - sum((r.width - request.kerf) * (r.height - request.kerf) for r in packer[-1])
+                                if last_bin_waste < min_waste_reduced:
+                                    min_waste_reduced = last_bin_waste
+                                    best_reduced_solution = packer
+                                    print(f"  -> ¡ÉXITO DE REDUCCIÓN! Solución encontrada con {num_target_sheets} láminas por '{algo.__name__}/{sort_name}'")
+                        except Exception as e:
+                            print(f"ADVERTENCIA en Fase 2B: {e}")
+                            continue
+                if best_reduced_solution:
+                    print("--- FASE 2B Completa: ¡Reducción exitosa! Usando la solución de menos láminas. ---")
+                    best_solution_so_far = best_reduced_solution
+                else:
+                    print(f"--- FASE 2B Completa: No se pudo reducir a {num_target_sheets} láminas. ---")
+            
+            final_bins = best_solution_so_far
 
     elif request.material_type == 'roll':
-        # --- LÓGICA PARA ROLLOS: BÚSQUEDA GLOBAL DEFINITIVA ---
         print(f"\n--- Iniciando Optimización para Rollo con {len(unpacked_pieces)} piezas ---")
         best_roll_solution = None
         best_roll_criteria = (-1, 0)
         for sort_name, sort_func in sort_strategies.items():
             for algo in algos_to_test:
                 try:
-                    packer = run_multi_bin_packing(
-                        sort_func(unpacked_pieces), 1, request.sheet.width, 9999999,
-                        request.kerf, not request.respect_grain, algo
-                    )
+                    packer = run_multi_bin_packing(sort_func(unpacked_pieces), 1, request.sheet.width, 9999999, request.kerf, not request.respect_grain, algo)
                     current_bin = packer[0] if len(packer) > 0 else None
                     if not current_bin or len(current_bin) == 0: continue
                     placed_count = len(current_bin)
@@ -170,7 +189,6 @@ def optimize_layout(request: OptimizationRequest):
         else:
             print("No se pudo encontrar una solución para el rollo.")
 
-    # --- PROCESAMIENTO DE RESULTADOS (Unificado) ---
     packed_sheets = []
     all_placed_ids = set()
     total_placed_piece_area = 0
@@ -199,7 +217,6 @@ def optimize_layout(request: OptimizationRequest):
 
     impossible_ids = [p['id'] for p in unpacked_pieces if p['id'] not in all_placed_ids]
     
-    # Calcular métricas globales
     if request.material_type == 'roll' and packed_sheets:
         consumed_length = max_y_in_roll
         packed_sheets[0]['sheet_dimensions']['height'] = consumed_length
