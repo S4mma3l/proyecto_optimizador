@@ -28,24 +28,25 @@ class OptimizationRequest(BaseModel):
 
 # --- CONFIGURACIÓN DE FASTAPI Y CORS (Sin cambios) ---
 app = FastAPI(
-    title="API de Optimización de Corte (Optimización Definitiva)",
-    description="Motor con algoritmo de búsqueda iterativa y criterios de selección avanzados para una perfección y estabilidad impecables.",
-    version="24.0.0"
+    title="API de Optimización de Corte (Refinamiento Global)",
+    description="Motor con algoritmo profesional de dos fases para una perfección y estabilidad impecables.",
+    version="25.0.0"
 )
 allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://s4mma3l.github.io"]
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-# --- FUNCIÓN HELPER UNIFICADA Y ROBUSTA ---
-# Esta función intenta empaquetar un conjunto de piezas en UN SOLO contenedor.
-def pack_one_bin(pieces_to_pack, bin_width, bin_height, kerf, rotation_allowed, algo):
+# --- FUNCIÓN HELPER PARA EMPAQUETAR EN MÚLTIPLES CONTENEDORES ---
+# Esta función intenta empaquetar un conjunto de piezas en un número específico de contenedores.
+def run_multi_bin_packing(pieces_to_pack, num_bins, bin_width, bin_height, kerf, rotation_allowed, algo):
     packer = rectpack.newPacker(pack_algo=algo, rotation=rotation_allowed)
     for p in pieces_to_pack:
         packer.add_rect(width=p['width'] + kerf, height=p['height'] + kerf, rid=p.get('id'))
-    packer.add_bin(width=bin_width, height=bin_height)
+    for _ in range(num_bins):
+        packer.add_bin(width=bin_width, height=bin_height)
     packer.pack()
-    # Devuelve el contenedor si tiene piezas, de lo contrario devuelve None.
-    return packer[0] if len(packer) > 0 else None
+    # Devuelve el objeto packer completo, que contiene tanto los contenedores como las piezas no colocadas.
+    return packer
 
 
 @app.post("/api/optimize")
@@ -58,13 +59,13 @@ def optimize_layout(request: OptimizationRequest):
 
     # Estrategias de ordenamiento y algoritmos
     sort_strategies = {
-        "area": lambda pieces: sorted(pieces, key=lambda p: p['width'] * p['height'], reverse=True),
-        "short_side": lambda pieces: sorted(pieces, key=lambda p: min(p['width'], p['height']), reverse=True),
-        "long_side": lambda pieces: sorted(pieces, key=lambda p: max(p['width'], p['height']), reverse=True),
-        "height": lambda pieces: sorted(pieces, key=lambda p: p['height'], reverse=True),
-        "width": lambda pieces: sorted(pieces, key=lambda p: p['width'], reverse=True),
-        "perimeter": lambda pieces: sorted(pieces, key=lambda p: 2*p['width'] + 2*p['height'], reverse=True),
-        "none": lambda pieces: pieces
+        "area": lambda p_list: sorted(p_list, key=lambda p: p['width'] * p['height'], reverse=True),
+        "short_side": lambda p_list: sorted(p_list, key=lambda p: min(p['width'], p['height']), reverse=True),
+        "long_side": lambda p_list: sorted(p_list, key=lambda p: max(p['width'], p['height']), reverse=True),
+        "height": lambda p_list: sorted(p_list, key=lambda p: p['height'], reverse=True),
+        "width": lambda p_list: sorted(p_list, key=lambda p: p['width'], reverse=True),
+        "perimeter": lambda p_list: sorted(p_list, key=lambda p: 2 * p['width'] + 2 * p['height'], reverse=True),
+        "none": lambda p_list: p_list
     }
     algos_to_test = [
         rectpack.MaxRectsBssf, rectpack.MaxRectsBaf, rectpack.MaxRectsBlsf,
@@ -75,72 +76,88 @@ def optimize_layout(request: OptimizationRequest):
 
     # --- LÓGICA DE OPTIMIZACIÓN DUAL Y ROBUSTA ---
     if request.material_type == 'sheet':
-        # --- LÓGICA PARA LÁMINAS: LLENADO INTELIGENTE ITERATIVO ---
-        # Este método es estable y encuentra una solución de alta calidad llenando una lámina a la vez.
-        print("\n--- Iniciando Optimización para Láminas (Llenado Inteligente Iterativo) ---")
+        # --- FASE 1: OBTENER UNA SOLUCIÓN INICIAL DE ALTA CALIDAD ---
+        print("\n--- FASE 1: Generando solución inicial de alta calidad ---")
+        initial_bins = []
         pieces_to_pack = list(unpacked_pieces)
-        sheet_index = 0
         while pieces_to_pack:
-            sheet_index += 1
-            print(f"--- Optimizando Lámina #{sheet_index} con {len(pieces_to_pack)} piezas restantes ---")
-            
             best_bin_for_this_sheet = None
-            # Criterio de selección avanzado: (porcentaje de llenado, número de piezas)
-            best_selection_criteria = (-1, -1) 
-            
+            best_selection_criteria = (-1, -1)
             for sort_name, sort_func in sort_strategies.items():
-                sorted_pieces_subset = sort_func(pieces_to_pack)
                 for algo in algos_to_test:
                     try:
-                        current_bin = pack_one_bin(
-                            sorted_pieces_subset, request.sheet.width, request.sheet.height,
-                            request.kerf, not request.respect_grain, algo
-                        )
+                        packer = rectpack.newPacker(pack_algo=algo, rotation=not request.respect_grain)
+                        for p in sort_func(pieces_to_pack):
+                            packer.add_rect(width=p['width'] + request.kerf, height=p['height'] + request.kerf, rid=p.get('id'))
+                        packer.add_bin(width=request.sheet.width, height=request.sheet.height)
+                        packer.pack()
+                        current_bin = packer[0] if len(packer) > 0 else None
                         if current_bin and len(current_bin) > 0:
                             placed_area = sum((r.width - request.kerf) * (r.height - request.kerf) for r in current_bin)
                             fill_percentage = (placed_area / (current_bin.width * current_bin.height)) * 100
-                            current_criteria = (fill_percentage, len(current_bin))
-                            
-                            if current_criteria > best_selection_criteria:
-                                best_selection_criteria = current_criteria
+                            if (fill_percentage, len(current_bin)) > best_selection_criteria:
+                                best_selection_criteria = (fill_percentage, len(current_bin))
                                 best_bin_for_this_sheet = current_bin
                     except Exception as e:
-                        print(f"ADVERTENCIA en optimización de lámina: {e}")
+                        print(f"ADVERTENCIA en Fase 1: {e}")
                         continue
-            
             if best_bin_for_this_sheet:
-                fill_perc, num_pieces = best_selection_criteria
-                print(f"  -> Mejor llenado para Lámina #{sheet_index} encontrado: {fill_perc:.2f}% de ocupación con {num_pieces} piezas.")
-                final_bins.append(best_bin_for_this_sheet)
+                initial_bins.append(best_bin_for_this_sheet)
                 placed_ids = {r.rid for r in best_bin_for_this_sheet}
                 pieces_to_pack = [p for p in pieces_to_pack if p['id'] not in placed_ids]
             else:
-                print("--- No se pudieron colocar más piezas. Finalizando optimización. ---")
                 break
+        
+        print(f"--- FASE 1 Completa: Solución inicial encontrada con {len(initial_bins)} láminas. ---")
+
+        # --- FASE 2: REFINAMIENTO GLOBAL PARA LA PERFECCIÓN ---
+        if len(initial_bins) > 1:
+            num_target_sheets = len(initial_bins) - 1
+            print(f"\n--- FASE 2: Intentando refinamiento global para reducir a {num_target_sheets} láminas ---")
+            best_refined_solution = None
+            min_waste_refined = float('inf')
+            for sort_name, sort_func in sort_strategies.items():
+                for algo in algos_to_test:
+                    try:
+                        packer = run_multi_bin_packing(
+                            sort_func(unpacked_pieces), num_target_sheets, request.sheet.width, request.sheet.height,
+                            request.kerf, not request.respect_grain, algo
+                        )
+                        if not packer.unplaced_rects():
+                            last_bin_waste = (packer[-1].width * packer[-1].height) - sum((r.width - request.kerf) * (r.height - request.kerf) for r in packer[-1])
+                            if last_bin_waste < min_waste_refined:
+                                min_waste_refined = last_bin_waste
+                                best_refined_solution = packer
+                                print(f"  -> ¡ÉXITO DE REFINAMIENTO! Solución encontrada con {num_target_sheets} láminas por '{algo.__name__}/{sort_name}'")
+                    except Exception as e:
+                        print(f"ADVERTENCIA en Fase 2: {e}")
+                        continue
+            if best_refined_solution:
+                print("--- FASE 2 Completa: ¡Refinamiento exitoso! Usando la solución mejorada. ---")
+                final_bins = best_refined_solution
+            else:
+                print("--- FASE 2 Completa: No se pudo mejorar. La solución inicial es la óptima. ---")
+                final_bins = initial_bins
+        else:
+            final_bins = initial_bins
 
     elif request.material_type == 'roll':
         # --- LÓGICA PARA ROLLOS: BÚSQUEDA GLOBAL DEFINITIVA ---
-        # Este algoritmo busca la solución que coloque más piezas en la menor longitud posible.
-        print(f"\n--- Iniciando Optimización para Rollo (Búsqueda Global Definitiva) con {len(unpacked_pieces)} piezas ---")
+        print(f"\n--- Iniciando Optimización para Rollo con {len(unpacked_pieces)} piezas ---")
         best_roll_solution = None
-        # Criterio de selección: (número de piezas colocadas, -longitud consumida)
-        best_roll_criteria = (-1, 0) 
-
+        best_roll_criteria = (-1, 0)
         for sort_name, sort_func in sort_strategies.items():
-            sorted_pieces = sort_func(unpacked_pieces)
             for algo in algos_to_test:
                 try:
-                    current_bin = pack_one_bin(
-                        sorted_pieces, request.sheet.width, 9999999,
+                    packer = run_multi_bin_packing(
+                        sort_func(unpacked_pieces), 1, request.sheet.width, 9999999,
                         request.kerf, not request.respect_grain, algo
                     )
-                    if not current_bin or len(current_bin) == 0:
-                        continue
-
+                    current_bin = packer[0] if len(packer) > 0 else None
+                    if not current_bin or len(current_bin) == 0: continue
                     placed_count = len(current_bin)
                     consumed_length = max((r.y + r.height for r in current_bin), default=0)
                     current_criteria = (placed_count, -consumed_length)
-                    
                     if current_criteria > best_roll_criteria:
                         best_roll_criteria = current_criteria
                         best_roll_solution = current_bin
@@ -148,7 +165,6 @@ def optimize_layout(request: OptimizationRequest):
                 except Exception as e:
                     print(f"ADVERTENCIA en optimización de rollo: {e}")
                     continue
-        
         if best_roll_solution:
             final_bins.append(best_roll_solution)
         else:
